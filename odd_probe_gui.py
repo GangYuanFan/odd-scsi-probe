@@ -71,10 +71,10 @@ def build_display_model(result):
              "category": c.get("category", "?"), "result": c.get("result", "?"),
              "detail": c.get("detail", "")} for c in result.get("commands", [])]
     block_types = [
-        {"code": b.get("code"), "block_size": b.get("block_size"),
+        {"code": b.get("code"), "size": b.get("size"),
          "name": b.get("name", ""), "mandatory": bool(b.get("mandatory")),
          "result": b.get("result", "?"), "detail": b.get("detail", "")}
-        for b in result.get("cd_block_types", [])
+        for b in result.get("block_type_matrix", [])
     ]
     summary = result.get("summary", {})
     stats = {k: int(summary.get(k, 0)) for k in RESULT_ORDER}
@@ -155,7 +155,7 @@ class OddProbeApp(tk.Tk):
         bar = ttk.Frame(self, padding=(8, 4))
         bar.pack(side=tk.BOTTOM, fill=tk.X)
         self.progress = ttk.Progressbar(bar, mode="determinate", length=220,
-                                        maximum=len(odd_probe.CMDS),
+                                        maximum=odd_probe.TOTAL_PROBE_STEPS,
                                         variable=self.progress_var)
         self.progress.pack(side=tk.LEFT, padx=(0, 10))
         ttk.Label(bar, textvariable=self.status_var).pack(side=tk.LEFT)
@@ -296,7 +296,7 @@ class OddProbeApp(tk.Tk):
         self.result = None
         self._clear_results()
         self.progress["mode"] = "determinate"
-        self.progress["maximum"] = len(odd_probe.CMDS)
+        self.progress["maximum"] = odd_probe.TOTAL_PROBE_STEPS
         self.progress["value"] = 0
         self.status_var.set("檢測中（取得裝置資訊）...")
         self._queue = queue.Queue()
@@ -401,7 +401,7 @@ class OddProbeApp(tk.Tk):
         for b in block_types:
             icon = RESULT_ICON.get(b["result"], "?")
             mand = "(M)" if b["mandatory"] else "(O)"
-            lines.append(f"{b['code']:<6}{b['block_size']:<7}{icon + ' ' + b['result']:<15}{mand:<11}{b['name']}")
+            lines.append(f"{b['code']:<6}{b['size']:<7}{icon + ' ' + b['result']:<15}{mand:<11}{b['name']}")
         self._set_text(self.blocktype_txt, "\n".join(lines))
 
     def _fill_matrix(self, rows):

@@ -7,7 +7,9 @@ Scans a SCSI/ATAPI optical device and reports:
   * INQUIRY identity (vendor / product / revision / peripheral type / serial)
   * GET CONFIGURATION feature & profile list (CD / DVD / BD / HD-DVD / DDCD)
   * READ DISC INFORMATION media type
-  * Per-opcode support matrix for ~45 SCSI commands (safe probes only)
+  * READ CAPACITY media sector size (drives READ 10 buffer sizing)
+  * Per-opcode support matrix for 45 SCSI commands + READ CD Table 600
+    Data Block Type matrix (10 block types, safe probes only)
 
 Zero third-party dependencies — pure Python stdlib (ctypes / struct / os / ...).
 
@@ -139,7 +141,9 @@ ASC_NAMES = {
 }
 
 # ---------------------------------------------------------------------------
-# Command matrix: ~46 opcodes covering SPC + MMC (all disc formats)
+# Command matrix: 45 opcodes covering SPC + MMC (all disc formats). READ CD
+# (0xBE) is deliberately absent: it is expanded at probe time into the Table
+# 600 Data Block Type matrix (10 types, see CD_BLOCK_TYPES / _read_cd_cdb).
 #   cdb: bytes of the CDB template; alloc: data-in buffer size (0 = none)
 #   unsafe: never send (destructive / would actually play audio)
 #   dangerous: only sent when --dangerous, with inert parameter CDBs
@@ -180,7 +184,6 @@ CMDS = [
     {"op": 0xAC, "name": "GET PERFORMANCE", "cat": "MMC", "cdb": bytes([0xAC, 0, 0x00, 0, 0, 0, 0, 0, 0x00, 0x01, 0, 0, 0x00, 0x20, 0, 0]), "alloc": 32},
     {"op": 0xAD, "name": "READ DVD STRUCTURE", "cat": "MMC", "cdb": bytes([0xAD, 0, 0x00, 0, 0, 0, 0, 0x00, 0x08, 0x00, 0, 0]), "alloc": 2048},
     {"op": 0xBB, "name": "SET CD SPEED", "cat": "MMC", "cdb": bytes([0xBB, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0]), "alloc": 0},  # max speed
-    {"op": 0xBE, "name": "READ CD", "cat": "MMC", "cdb": bytes([0xBE, 0x00, 0, 0, 0, 0, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]), "alloc": 2352},  # code 0 raw; runtime probes all Table 600 types (see cd_block_types)
 
     # ---- write-class (dangerous, default skipped; inert parameter CDBs only) ----
     {"op": 0x15, "name": "MODE SELECT 6", "cat": "DANGEROUS", "cdb": bytes([0x15, 0, 0x00, 0x00, 0x00, 0x00]), "alloc": 0, "dangerous": True},  # paramlen=0
@@ -197,6 +200,10 @@ CMDS = [
     {"op": 0xB6, "name": "SET STREAMING", "cat": "DANGEROUS", "cdb": bytes([0xB6, 0, 0, 0, 0, 0, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dangerous": True},  # paramlen=0
     {"op": 0xBF, "name": "SEND DVD STRUCTURE", "cat": "DANGEROUS", "cdb": bytes([0xBF, 0x00, 0x00, 0, 0, 0, 0, 0x00, 0, 0, 0, 0, 0x00, 0x00, 0, 0]), "alloc": 0, "dangerous": True},  # paramlen=0
 ]
+
+# Total probe steps = 45 opcodes + 10 READ CD Table 600 block types (55).
+# progress_cb totals and the GUI progress bar must use this, not len(CMDS).
+TOTAL_PROBE_STEPS = len(CMDS) + len(CD_BLOCK_TYPE_CODES)
 
 # ---------------------------------------------------------------------------
 # Linux backend (SG_IO ioctl)
@@ -557,7 +564,7 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
         "current_profile": None, "current_profile_name": None,
         "profiles": [], "features": [], "media_type": None,
         "media_block_size": None, "media_block_size_name": "unknown",
-        "cd_block_types": [],
+        "block_type_matrix": [],
         "commands": [], "summary": {}, "duration_sec": 0.0,
     }
 
@@ -607,23 +614,20 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
     result["media_block_size"] = media_block_size
     result["media_block_size_name"] = name_block_size(media_block_size)
 
-    # 5) READ CD — probe every valid Data Block Type (MMC Table 600).
-    #    Each type gets its own classification; the command-level 0xBE row in
-    #    the matrix reuses the code-0 result (no duplicate ioctl).
-    read_cd_cmd = {}
-    cd_block_types = []
+    # 5) READ CD — probe every valid Data Block Type (MMC Table 600). Each
+    #    type is one matrix row (alloc = that type's block size); results are
+    #    merged into the summary and drive the progress bar (55 total steps).
+    block_type_matrix = []
     for code in CD_BLOCK_TYPE_CODES:
         bt = CD_BLOCK_TYPES[code]
         status, sense, data, err = scsi_execute(dev, _read_cd_cdb(code), bt["size"], timeout_s)
         label, detail = classify_cd_block_type(status, sense, err)
-        if code == 0:
-            cmd_label, cmd_detail = classify(status, sense, err)
-            read_cd_cmd = {"label": cmd_label, "detail": cmd_detail}
-        cd_block_types.append({
-            "code": code, "block_size": bt["size"], "name": bt["name"],
+        block_type_matrix.append({
+            "code": code, "size": bt["size"], "name": bt["name"],
             "mandatory": bt["mandatory"], "result": label, "detail": detail,
+            "sense_hex": sense.hex(" ") if sense else "",
         })
-    result["cd_block_types"] = cd_block_types
+    result["block_type_matrix"] = block_type_matrix
 
     # 6) Command matrix (cache the commands already executed above)
     cache = {}
@@ -646,20 +650,12 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
                 cache[op] = ("SUPPORTED", "GOOD (cached from READ CAPACITY)")
             else:
                 cache[op] = classify(rc_status, rc_sense, rc_err)
-        elif op == 0xBE:
-            if read_cd_cmd:
-                cache[op] = (read_cd_cmd["label"],
-                             read_cd_cmd["detail"] + " (code 0; see CD Data Block Type matrix)")
-            else:
-                status, sense, data, err = scsi_execute(dev, cmd["cdb"], cmd["alloc"], timeout_s)
-                cache[op] = classify(status, sense, err)
 
     summary = {"SUPPORTED": 0, "NOT_SUPPORTED": 0, "NEEDS_MEDIA": 0,
                "SKIPPED": 0, "TIMEOUT": 0, "OTHER": 0}
-    total_cmds = len(CMDS)
     for idx, cmd in enumerate(CMDS):
         if progress_cb:
-            progress_cb(idx + 1, total_cmds)
+            progress_cb(idx + 1, TOTAL_PROBE_STEPS)
         op = cmd["op"]
         entry = {"opcode": f"0x{op:02X}", "name": cmd["name"], "category": cmd["cat"]}
 
@@ -690,6 +686,13 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
         entry["detail"] = detail
         summary[label] = summary.get(label, 0) + 1
         result["commands"].append(entry)
+
+    # 7) Block type results are part of the probe: merged into the summary
+    #    and counted by the progress bar (total = TOTAL_PROBE_STEPS).
+    for bi, bt in enumerate(block_type_matrix):
+        if progress_cb:
+            progress_cb(len(CMDS) + bi + 1, TOTAL_PROBE_STEPS)
+        summary[bt["result"]] = summary.get(bt["result"], 0) + 1
 
     result["summary"] = summary
     result["duration_sec"] = round(time.time() - t0, 2)
@@ -725,15 +728,14 @@ def format_human(r):
         icon = {"SUPPORTED": "✅", "NOT_SUPPORTED": "❌", "NEEDS_MEDIA": "💿",
                 "SKIPPED": "🔒", "TIMEOUT": "⏱️", "OTHER": "⚠️"}.get(c["result"], "?")
         lines.append(f"  {c['opcode']:<8}{c['name']:<34}{c['category']:<11}{icon + ' ' + c['result']:<14} {c['detail']}")
-    if r.get("cd_block_types"):
+    if r.get("block_type_matrix"):
         lines.append("")
-        lines.append("CD Data Block Type Matrix (READ CD, MMC Table 600):")
-        lines.append(f"  {'Code':<5}{'Size':<7}{'Result':<14}Name")
-        for bt in r["cd_block_types"]:
+        lines.append("Data Block Type Matrix (READ CD 0xBE):")
+        lines.append(f"  {'Code':<6}{'Size':<7}{'Type':<50}Result")
+        for bt in r["block_type_matrix"]:
             icon = {"SUPPORTED": "✅", "NOT_SUPPORTED": "❌", "NEEDS_MEDIA": "💿",
                     "SKIPPED": "🔒", "TIMEOUT": "⏱️", "OTHER": "⚠️"}.get(bt["result"], "?")
-            mand = "(M)" if bt["mandatory"] else "(O)"
-            lines.append(f"  {bt['code']:<5}{bt['block_size']:<7}{icon + ' ' + bt['result']:<14}{mand} {bt['name']}")
+            lines.append(f"  {bt['code']:<6}{bt['size']:<7}{bt['name']:<50}{icon} {bt['result']}")
     s = r["summary"]
     lines.append("")
     lines.append(f"Summary: {s['SUPPORTED']} SUPPORTED / {s['NOT_SUPPORTED']} NOT SUPPORTED / "
