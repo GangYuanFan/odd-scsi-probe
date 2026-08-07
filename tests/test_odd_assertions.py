@@ -109,9 +109,9 @@ check("alloc == 512 (matches 1 block)", read10["alloc"] == 512)
 check("LBA bytes 2-5 == 0", read10["cdb"][2:6] == bytes(4))
 
 print("== command matrix counts / safety flags ==")
-check("total 46 opcodes", len(op.CMDS) == 46, str(len(op.CMDS)))
-check("15 SPC / 18 MMC / 13 DANGEROUS",
-      [sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")] == [15, 18, 13])
+check("total 45 opcodes (READ CD moved to block-type matrix)", len(op.CMDS) == 45, str(len(op.CMDS)))
+check("15 SPC / 17 MMC / 13 DANGEROUS",
+      [sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")] == [15, 17, 13])
 for opc in (0xA1, 0x5B, 0x56):
     c = next(c for c in op.CMDS if c["op"] == opc)
     check(f"0x{opc:02X} has unsafe flag", bool(c.get("unsafe")), str(c))
@@ -193,10 +193,10 @@ op.scsi_execute = lambda path, cdb, alloc, timeout_s: (0x00, b"", b"\x00" * max(
 try:
     calls = []
     res = op.probe_device("/dev/fake", 1, False, progress_cb=lambda d, t: calls.append((d, t)))
-    check("46 monotonic calls (incl. SKIPPED)", len(calls) == 46 and calls[0] == (1, 46)
-          and calls[-1] == (46, 46) and [c[0] for c in calls] == list(range(1, 47)), str(len(calls)))
-    check("summary counts add up to 46",
-          sum(res["summary"].values()) == 46, str(res["summary"]))
+    check("55 monotonic calls (45 opcodes + 10 block types)", len(calls) == 55 and calls[0] == (1, 55)
+          and calls[-1] == (55, 55) and [c[0] for c in calls] == list(range(1, 56)), str(len(calls)))
+    check("summary counts add up to 55 (block types merged)",
+          sum(res["summary"].values()) == 55, str(res["summary"]))
 finally:
     op.scsi_execute = orig_exec
 
@@ -227,13 +227,14 @@ print("== sector size / READ 10 dynamic allocation (PM requirement) ==")
 check("name_block_size(None) == unknown", op.name_block_size(None) == "unknown")
 check("name_block_size(2352) == '2352 (CD raw)'", op.name_block_size(2352) == "2352 (CD raw)")
 check("name_block_size(2048) == '2048'", op.name_block_size(2048) == "2048")
-readcd = next(c for c in op.CMDS if c["op"] == 0xBE)
-check("READ CD alloc >= 2352 (raw sector max)", readcd["alloc"] >= 2352, str(readcd["alloc"]))
 check("READ 10 static alloc >= 512 (min sector)", read10["alloc"] >= 512)
+check("TOTAL_PROBE_STEPS == 55 (45 + 10)", op.TOTAL_PROBE_STEPS == 55, str(op.TOTAL_PROBE_STEPS))
+check("0xBE not in CMDS (block-type matrix owns READ CD)",
+      all(c["op"] != 0xBE for c in op.CMDS))
 # CDB/alloc consistency: sector-transfer READ commands must allocate at
 # least one full sector; fixed-structure responses (sense, capacities,
 # keys) legitimately use small buffers and are not sector-based.
-for opc, min_alloc in ((0x28, 512), (0xAD, 2048), (0xBE, 2352)):
+for opc, min_alloc in ((0x28, 512), (0xAD, 2048)):
     cmd = next(c for c in op.CMDS if c["op"] == opc)
     check(f"0x{opc:02X} alloc >= {min_alloc} (sector-sized)", cmd["alloc"] >= min_alloc, str(cmd["alloc"]))
 check("READ 10 CDB transfer len = 1 block (bytes 7-8)", read10["cdb"][7:9] == bytes([0x00, 0x01]))
@@ -243,7 +244,7 @@ orig_exec = op.scsi_execute
 def make_exec(rc_block_size=None):
     calls = []
     def exec_(path, cdb, alloc, timeout_s):
-        calls.append((cdb[0], alloc))
+        calls.append((bytes(cdb), alloc))
         if cdb[0] == 0x25:
             if rc_block_size is None:
                 return (0x02, bytes([0x70, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x20, 0x00]), b"", "")
@@ -256,30 +257,39 @@ try:
         exec_, calls = make_exec(bs)
         op.scsi_execute = exec_
         r = op.probe_device("/dev/fake", 1, False)
-        alloc = next(c for c in calls if c[0] == 0x28)[1]
+        alloc = next(c for c in calls if c[0][0] == 0x28)[1]
         check(f"READ 10 alloc == block size {bs} ({name})", alloc == want, str(alloc))
         check(f"media_block_size reported ({name})", r["media_block_size"] == bs)
     exec_, calls = make_exec(None)
     op.scsi_execute = exec_
     r = op.probe_device("/dev/fake", 1, False)
-    alloc = next(c for c in calls if c[0] == 0x28)[1]
+    alloc = next(c for c in calls if c[0][0] == 0x28)[1]
     check("READ CAPACITY fail -> READ 10 alloc fallback 2352", alloc == 2352, str(alloc))
     check("no media -> media_block_size unknown", r["media_block_size"] is None
           and r["media_block_size_name"] == "unknown")
     exec_, calls = make_exec(2048)
     op.scsi_execute = exec_
     r = op.probe_device("/dev/fake", 1, False)
-    be_calls = [c for c in calls if c[0] == 0xBE]
+    be_calls = [c for c in calls if c[0][0] == 0xBE]
     check("READ CD probed once per valid block type (10)", len(be_calls) == 10, str(len(be_calls)))
     check("per-type alloc matches Table 600 sizes",
           [c[1] for c in be_calls] == [op.CD_BLOCK_TYPES[code]["size"] for code in op.CD_BLOCK_TYPE_CODES])
-    check("cd_block_types reported (10 entries)", len(r["cd_block_types"]) == 10)
-    by_code = {bt["code"]: bt for bt in r["cd_block_types"]}
+    check("block_type_matrix reported (10 entries)", len(r["block_type_matrix"]) == 10)
+    by_code = {bt["code"]: bt for bt in r["block_type_matrix"]}
     check("block type 0 mandatory=False / 8 mandatory=True",
           by_code[0]["mandatory"] is False and by_code[8]["mandatory"] is True)
-    row_be = next(c for c in r["commands"] if c["opcode"] == "0xBE")
-    check("matrix 0xBE cached from code 0 (no dup ioctl)",
-          len(be_calls) == 10 and "CD Data Block Type matrix" in row_be["detail"])
+    check("per-code CDB byte1 == code<<2 (bits 7-2)",
+          all(c[0][1] == (code << 2) & 0xFF
+              for c, code in zip(be_calls, op.CD_BLOCK_TYPE_CODES)),
+          [hex(c[0][1]) for c in be_calls])
+    check("per-code user-data flag: byte6=0x10 for codes >= 8",
+          all((c[0][6] == 0x10) == (code >= 8)
+              for c, code in zip(be_calls, op.CD_BLOCK_TYPE_CODES)))
+    check("block_type_matrix entries carry sense_hex + size",
+          all("sense_hex" in bt and bt["size"] == op.CD_BLOCK_TYPES[bt["code"]]["size"]
+              for bt in r["block_type_matrix"]))
+    check("no 0xBE row in opcode matrix (replaced by block-type loop)",
+          all(c["opcode"] != "0xBE" for c in r["commands"]))
 finally:
     op.scsi_execute = orig_exec
 

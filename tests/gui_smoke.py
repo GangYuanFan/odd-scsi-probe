@@ -22,10 +22,10 @@ FAKE_RESULT = {
                  {"code": 0x0040, "current": True, "persistent": False}],
     "media_type": "BD-R (disc type 0x0d)",
     "media_block_size": 2352, "media_block_size_name": "2352 (CD raw)",
-    "cd_block_types": [
-        {"code": 0, "block_size": 2352, "name": "Raw data", "mandatory": False,
+    "block_type_matrix": [
+        {"code": 0, "size": 2352, "name": "Raw data", "mandatory": False,
          "result": "SUPPORTED", "detail": "GOOD"},
-        {"code": 8, "block_size": 2048, "name": "Mode 1 ISO/IEC 10149", "mandatory": True,
+        {"code": 8, "size": 2048, "name": "Mode 1 ISO/IEC 10149", "mandatory": True,
          "result": "SUPPORTED", "detail": "GOOD"},
     ],
     "commands": [{"opcode": "0x28", "name": "READ 10", "category": "SPC",
@@ -76,7 +76,7 @@ def main():
     # --- success path through worker thread + queue ---
     def fake_probe(dev, timeout_s, dangerous, progress_cb=None):
         for i in range(1, 5):
-            progress_cb(i, len(odd_probe.CMDS))
+            progress_cb(i, odd_probe.TOTAL_PROBE_STEPS)
         return FAKE_RESULT
     odd_probe.probe_device = fake_probe
     odd_probe.discover_devices = lambda: ["/dev/sg0"]
