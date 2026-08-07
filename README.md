@@ -253,3 +253,20 @@ xvfb-run -a python3 tests/gui_smoke.py                # GUI 實機 smoke（需�
 ## License
 
 MIT（依專案管理決定；本倉庫初始提交未含授權檔）。
+
+## 📦 版本與 Release
+
+### v1.0.0 (2026-08-07)
+- 首發版。USB ODD SCSI command 支援度檢測工具。
+- 功能：
+  - CLI（odd_probe.py）與 Tkinter GUI（odd_probe_gui.py）雙介面
+  - 45 個 SCSI opcode + 10 種 CD Data Block Type（MMC Table 600）= 55 步指令矩陣
+  - 全格式支援：CD / DVD / BD / HD-DVD / DDCD（profile 0x05-0x5A 全家族對照）
+  - 雙平台：Linux (SG_IO) / Windows (SCSI Pass-Through)
+  - 完整報告：INQUIRY、GET CONFIGURATION（profiles + features）、READ DISC INFORMATION、media 自動偵測
+  - JSON 匯出（--json）
+  - Windows 單檔 exe 打包（PyInstaller，含版本資訊）
+- 安全設計：BLANK (0xA1)、CLOSE TRACK/SESSION (0x5B/0x56)、PLAY AUDIO (0x47/0x48) 任何模式永不執行
+- 已知限制：
+  - Windows 實體 ODD 的 INQUIRY 成功路徑尚未真機驗證（需有光碟機的機器補測，見 DEBT.md）
+  - exe 12.6MB 可能觸發防毒誤報（對策：白名單或 --onedir 打包）
