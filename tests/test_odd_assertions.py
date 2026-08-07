@@ -109,9 +109,9 @@ check("alloc == 0 static (runtime override to media block size)", read10["alloc"
 check("LBA bytes 2-5 == 0", read10["cdb"][2:6] == bytes(4))
 
 print("== command matrix counts / safety flags (v1.2.0 MMC-6 + RSOC) ==")
-check("total 59 opcodes (READ CD moved to block-type matrix)", len(op.CMDS) == 59, str(len(op.CMDS)))
-check("16 SPC / 24 MMC / 19 DANGEROUS",
-      [sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")] == [16, 24, 19],
+check("total 69 opcodes (READ CD moved to block-type matrix)", len(op.CMDS) == 69, str(len(op.CMDS)))
+check("21 SPC / 24 MMC / 24 DANGEROUS",
+      [sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")] == [21, 24, 24],
       str([sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")]))
 check("RSOC entry present (MAINTENANCE IN SA=0x0C)", any(c.get("rsoc") for c in op.CMDS), "missing")
 rsoc = next((c for c in op.CMDS if c.get("rsoc")), None)
@@ -125,7 +125,7 @@ check("full MMC-6 Table 226/227 coverage (48 opcodes, 0xBE via block-type matrix
 check("every command has a legal dir (in/out/none)",
       all(c.get("dir") in ("in", "out", "none") for c in op.CMDS))
 check("all 'out' commands carry alloc > 0 or runtime override",
-      all(c["alloc"] > 0 or c["op"] in (0x15, 0x2A, 0x2E, 0x55, 0xAA) for c in op.CMDS if c.get("dir") == "out"),
+      all(c["alloc"] > 0 or c["op"] in (0x15, 0x2A, 0x2E, 0x55, 0xAA, 0x4D) for c in op.CMDS if c.get("dir") == "out"),
       str([hex(c["op"]) for c in op.CMDS if c.get("dir") == "out" and c["alloc"] == 0]))
 check("0xA0 is REPORT LUNS (was wrongly REPORT KEY)",
       next(c for c in op.CMDS if c["op"] == 0xA0)["name"] == "REPORT LUNS")
@@ -144,8 +144,8 @@ for opc in (0xA1, 0x5B, 0x56, 0x04, 0xA6, 0x47, 0x48):
     c = next(c for c in op.CMDS if c["op"] == opc)
     check(f"0x{opc:02X} flagged dangerous (sent for real in --dangerous)", bool(c.get("dangerous")), str(c))
 danger = [c for c in op.CMDS if c.get("dangerous")]
-check("22 dangerous entries (incl. PLAY AUDIO x3 — full compat per product owner)",
-      len(danger) == 22, str(len(danger)))
+check("27 dangerous entries (incl. PLAY AUDIO x3 — full compat per product owner)",
+      len(danger) == 27, str(len(danger)))
 check("no 'unsafe' flag remains (owner removed never-send policy)",
       all(not c.get("unsafe") for c in op.CMDS))
 wb = next(c for c in op.CMDS if c["op"] == 0x3B)
@@ -231,10 +231,10 @@ op.scsi_execute = lambda path, cdb, alloc, timeout_s, direction="in", out_data=b
 try:
     calls = []
     res = op.probe_device("/dev/fake", 1, False, progress_cb=lambda d, t: calls.append((d, t)))
-    check("69 monotonic calls (59 opcodes + 10 block types)", len(calls) == 69 and calls[0] == (1, 69)
-          and calls[-1] == (69, 69) and [c[0] for c in calls] == list(range(1, 70)), str(len(calls)))
-    check("summary counts add up to 69 (block types merged)",
-          sum(res["summary"].values()) == 69, str(res["summary"]))
+    check("79 monotonic calls (69 opcodes + 10 block types)", len(calls) == 79 and calls[0] == (1, 79)
+          and calls[-1] == (79, 79) and [c[0] for c in calls] == list(range(1, 80)), str(len(calls)))
+    check("summary counts add up to 79 (block types merged)",
+          sum(res["summary"].values()) == 79, str(res["summary"]))
     check("RSOC probe populates rsoc_opcodes from SUPPORTED 0xA3",
           isinstance(res.get("rsoc_opcodes"), list), str(type(res.get("rsoc_opcodes"))))
 finally:
@@ -274,7 +274,7 @@ check("name_block_size(None) == unknown", op.name_block_size(None) == "unknown")
 check("name_block_size(2352) == '2352 (CD raw)'", op.name_block_size(2352) == "2352 (CD raw)")
 check("name_block_size(2048) == '2048'", op.name_block_size(2048) == "2048")
 check("READ 10 static alloc is 0 (runtime override)", read10["alloc"] == 0)
-check("TOTAL_PROBE_STEPS == 69 (59 + 10)", op.TOTAL_PROBE_STEPS == 69, str(op.TOTAL_PROBE_STEPS))
+check("TOTAL_PROBE_STEPS == 79 (69 + 10)", op.TOTAL_PROBE_STEPS == 79, str(op.TOTAL_PROBE_STEPS))
 check("0xBE not in CMDS (block-type matrix owns READ CD)",
       all(c["op"] != 0xBE for c in op.CMDS))
 # CDB/alloc consistency: sector-transfer READ commands must allocate at

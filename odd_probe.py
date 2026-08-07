@@ -190,6 +190,12 @@ CMDS = [
     {"op": 0x5A, "name": "MODE SENSE 10", "cat": "SPC", "cdb": bytes([0x5A, 0, 0x3F, 0, 0, 0, 0, 0, 0xFF, 0xFF]), "alloc": 65535, "dir": "in"},
     {"op": 0x1C, "name": "RECEIVE DIAGNOSTIC RESULTS", "cat": "SPC", "cdb": bytes([0x1C, 0, 0x00, 0x00, 0x04, 0]), "alloc": 4, "dir": "in"},
     {"op": 0x1D, "name": "SEND DIAGNOSTIC", "cat": "SPC", "cdb": bytes([0x1D, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none"},  # self-test=0
+    # ---- MMC-4 / SPC legacy additions (v1.2.1) ----
+    {"op": 0x01, "name": "REZERO UNIT", "cat": "SPC", "cdb": bytes([0x01, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "legacy": True},  # obsolete SPC
+    {"op": 0x16, "name": "RESERVE 6", "cat": "SPC", "cdb": bytes([0x16, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "legacy": True},  # obsolete SPC
+    {"op": 0x34, "name": "PREFETCH 10", "cat": "SPC", "cdb": bytes([0x34, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0]), "alloc": 0, "dir": "none"},  # LBA=0 len=1
+    {"op": 0x36, "name": "LOCK/UNLOCK CACHE", "cat": "SPC", "cdb": bytes([0x36, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none"},
+    {"op": 0x4C, "name": "LOG SENSE", "cat": "SPC", "cdb": bytes([0x4C, 0, 0x00, 0, 0, 0, 0, 0, 0xFF, 0xFF]), "alloc": 4096, "dir": "in"},
     {"op": 0xA3, "name": "MAINTENANCE IN (RSOC)", "cat": "SPC", "cdb": bytes([0xA3, 0x0C, 0, 0, 0, 0, 0, 0, 0x10, 0x00, 0, 0]), "alloc": 4096, "dir": "in", "rsoc": True},  # SPC-3 SA=0x0C REPORT SUPPORTED OPERATION CODES — drive reports its own opcode list (shares opcode with MMC-6 SEND KEY; distinguished by service action)
 
     # ---- MMC optical commands (all disc formats, MMC-6 rev 2g) ----
@@ -238,6 +244,12 @@ CMDS = [
     {"op": 0xB5, "name": "SECURITY PROTOCOL OUT", "cat": "DANGEROUS", "cdb": bytes([0xB5, 0x06, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0, 0]), "alloc": 4, "dir": "out", "dangerous": True},  # protocol 06h OSSC, param len 4
     {"op": 0xB6, "name": "SET STREAMING", "cat": "DANGEROUS", "cdb": bytes([0xB6, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x14, 0]), "alloc": 20, "dir": "out", "dangerous": True},  # Type 0 = performance descriptor (20 B)
     {"op": 0xBF, "name": "SEND DISC STRUCTURE", "cat": "DANGEROUS", "cdb": bytes([0xBF, 0x00, 0, 0, 0, 0, 0, 0x00, 0x00, 0x04, 0x00, 0]), "alloc": 4, "dir": "out", "dangerous": True},  # media type 0 (DVD), format code 0, param len 4
+    # ---- MMC-4 / SPC legacy additions (v1.2.1) ----
+    {"op": 0x2C, "name": "ERASE 10", "cat": "DANGEROUS", "cdb": bytes([0x2C, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0]), "alloc": 0, "dir": "none", "dangerous": True, "danger_note": "erases media blocks (LBA 0, 1 block)"},
+    {"op": 0x4D, "name": "LOG SELECT", "cat": "DANGEROUS", "cdb": bytes([0x4D, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0]), "alloc": 0, "dir": "out", "dangerous": True},  # paramlen=0
+    {"op": 0x4E, "name": "STOP PLAY/SCAN", "cat": "DANGEROUS", "cdb": bytes([0x4E, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True, "legacy": True, "danger_note": "stops playback/scan"},
+    {"op": 0xA5, "name": "PLAY AUDIO 12", "cat": "DANGEROUS", "cdb": bytes([0xA5, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True, "legacy": True, "danger_note": "plays 1 block of audio"},  # 12-byte
+    {"op": 0xBA, "name": "SCAN", "cat": "DANGEROUS", "cdb": bytes([0xBA, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True, "legacy": True},  # 12-byte
 ]
 
 # Total probe steps = 59 opcodes + 10 READ CD Table 600 block types (69).
