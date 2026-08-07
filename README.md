@@ -11,7 +11,7 @@ USB ODD（光碟機）SCSI command 支援度檢測工具 — 支援 CD / DVD / B
   - **INQUIRY**：Vendor / Product / Revision / Peripheral Device Type / Serial Number (EVPD 0x80)
   - **GET CONFIGURATION**：Current Profile、全部支援 Profile（含 current 標記）、Feature List（49 個內建對照）
   - **READ DISC INFORMATION**：目前碟片 Disc Type（與 current profile 交叉比對）
-  - **指令矩陣**：58 個 opcode（MMC-6 Table 226/227 完整 48 指令 + 11 個 legacy 指令）逐指令判定支援度，外加 READ CD Table 600 Data Block Type 支援矩陣（10 種 block type）
+  - **指令矩陣**：69 個 opcode（MMC-6 Table 226/227 完整 48 指令 + legacy 指令 + MMC-4 gap closure 10 指令）逐指令判定支援度，外加 READ CD Table 600 Data Block Type 支援矩陣（10 種 block type）
 - 人類可讀輸出 + `--json` 機器可讀輸出（通過 `python3 -m json.tool` 驗證）
 - **雙模式**：預設 safe 模式（破壞性指令 SKIP）／ `--dangerous` 完整相容性測試模式（所有指令真實發送，見下方說明）
 
@@ -77,7 +77,7 @@ pythonw odd_probe_gui.py
 
 1. **掃描裝置** → 下拉選單列出候選裝置（Linux: `/dev/sg*` `/dev/sr*`；Windows: `\\.\CdRom*`），選取後「開始檢測」才會啟用
 2. 可選調整：`--dangerous` 完整相容性模式勾選（預設關閉；勾選時彈出確認警告，所有指令包含 BLANK / FORMAT / CLOSE TRACK / 彈 tray 皆真實發送）、Timeout（1-30 秒，預設 5）
-3. **開始檢測** → 背景執行緒執行完整探測，進度列顯示 `x/68`（58 個 opcode + 10 種 READ CD block type），UI 不凍結
+3. **開始檢測** → 背景執行緒執行完整探測，進度列顯示 `x/79`（69 個 opcode + 10 種 READ CD block type），UI 不凍結
 4. 結果分四頁顯示：
    - **裝置資訊**：Vendor / Product / Revision / Peripheral Type / Serial / Current Profile / Media Detected
    - **支援格式**：Profile 清單（current 標 `[*]`）+ Feature 清單
@@ -154,7 +154,7 @@ repo 在 WSL 檔案系統時，直接 `cmd.exe /c build.bat` 會遇到兩個坑�
 - Python 3.14.3 + PyInstaller 6.21.0：`dist\odd-probe.exe` 12,637,400 B（12.6 MB）編譯成功
 - `python odd_probe.py list`：32 個候選裝置（`\\.\CdRom0-15`、`\\.\Scsi0-15`）全部
   優雅回報 `unavailable: CreateFileW failed (2)`（ERROR_FILE_NOT_FOUND，無光碟機環境），不 crash
-- `python odd_probe.py --device \\.\CdRom0`：55 項矩陣完整執行，無裝置時
+- `python odd_probe.py --device \\.\CdRom0`：55 項矩陣完整執行（v1.0.0 時期：45 opcodes + 10 block types），無裝置時
   0 SUPPORTED / 40 OTHER / 15 SKIPPED（真實反映打不開）
 - exe 啟動驗證：tasklist 可見 `odd-probe.exe`（bootloader + 子進程），啟動不秒退
 
@@ -200,15 +200,15 @@ repo 在 WSL 檔案系統時，直接 `cmd.exe /c build.bat` 會遇到兩個坑�
 | 14 | — | Reserved | — |
 | 15 | — | NA Vendor Specific | — |
 
-工具對 code 0/1/2/3/8/9/10/11/12/13 各探測一次（READ CD 0xBE 因此不再出現在 opcode 矩陣中，由 block type 迴圈取代）；type 級分類：0x20（指令不存在）→ 整組 NOT_SUPPORTED，0x24/0x25（該 type 參數被拒）→ 該 type NOT_SUPPORTED，其餘同主矩陣判定邏輯。block type 結果**併入 summary 統計**並計入進度列（55 步）；JSON 輸出位於 `block_type_matrix`（每項含 `code` / `size` / `name` / `mandatory` / `result` / `detail` / `sense_hex`）。
+工具對 code 0/1/2/3/8/9/10/11/12/13 各探測一次（READ CD 0xBE 因此不再出現在 opcode 矩陣中，由 block type 迴圈取代）；type 級分類：0x20（指令不存在）→ 整組 NOT_SUPPORTED，0x24/0x25（該 type 參數被拒）→ 該 type NOT_SUPPORTED，其餘同主矩陣判定邏輯。block type 結果**併入 summary 統計**並計入進度列（79 步）；JSON 輸出位於 `block_type_matrix`（每項含 `code` / `size` / `name` / `mandatory` / `result` / `detail` / `sense_hex`）。
 
 ## 指令矩陣分類
 
 | 類別 | 數量 | 說明 |
 | --- | --- | --- |
-| SPC | 15 | SCSI Primary Commands 基礎（INQUIRY、MODE SENSE、READ 10 等） |
+| SPC | 21 | SCSI Primary Commands 基礎（INQUIRY、MODE SENSE、READ 10、LOG SENSE、LOCK/UNLOCK CACHE 等） |
 | MMC | 24 | 光碟媒體指令（GET CONFIGURATION、READ DISC INFORMATION、REPORT LUNS、SECURITY PROTOCOL IN、READ/WRITE 12、MECHANISM STATUS 等；READ CD 以 block type 矩陣另行探測） |
-| DANGEROUS | 19 | 寫入/破壞性類（僅 `--dangerous` 完整相容性模式時**真實發送**） |
+| DANGEROUS | 24 | 寫入/破壞性類（BLANK、FORMAT、WRITE、ERASE 10、LOG SELECT、STOP PLAY/SCAN、PLAY AUDIO 12、SCAN 等；僅 `--dangerous` 完整相容性模式時**真實發送**） |
 | READ CD block types | +10 | Table 600 每種 block type 各測一次（併入 summary） |
 
 ### 判定邏輯
@@ -229,7 +229,7 @@ repo 在 WSL 檔案系統時，直接 `cmd.exe /c build.bat` 會遇到兩個坑�
 | 模式 | 行為 | 用途 |
 | --- | --- | --- |
 | 預設（safe） | 破壞性指令顯示 `🔒 SKIPPED` + 提示 `--dangerous full-compat mode not enabled`；讀取/查詢指令照常真實測試 | 一般使用（避免誤抹資料碟） |
-| `--dangerous`（完整相容性） | **所有指令真實發送**：BLANK 抹碟、FORMAT UNIT 格式化、CLOSE TRACK/SESSION 關閉 session、LOAD/UNLOAD 彈 tray、WRITE 10/12 寫入資料、SEND OPC / SEND KEY / SEND CUE SHEET / SEND DISC STRUCTURE / SECURITY PROTOCOL OUT / REPAIR TRACK / SET STREAMING / MODE SELECT 真實參數 | **USB ODD 產品相容性測試（老闆需求）** |
+| `--dangerous`（完整相容性） | **所有指令真實發送**：BLANK 抹碟、FORMAT UNIT 格式化、CLOSE TRACK/SESSION 關閉 session、LOAD/UNLOAD 彈 tray、WRITE 10/12 寫入資料、ERASE 10 抹除媒體區塊、LOG SELECT、STOP PLAY/SCAN、PLAY AUDIO 12、SCAN、SEND OPC / SEND KEY / SEND CUE SHEET / SEND DISC STRUCTURE / SECURITY PROTOCOL OUT / REPAIR TRACK / SET STREAMING / MODE SELECT 真實參數 | **USB ODD 產品相容性測試（老闆需求）** |
 
 **唯一例外（永遠不執行）：**
 
@@ -258,7 +258,7 @@ repo 在 WSL 檔案系統時，直接 `cmd.exe /c build.bat` 會遇到兩個坑�
 
 ```bash
 python3 -m py_compile odd_probe.py odd_probe_gui.py   # 語法驗證
-python3 tests/test_odd_assertions.py                  # Logic Assertion（128 項，含 MMC-6 對齊回歸）
+python3 tests/test_odd_assertions.py                  # Logic Assertion（134 項，含 MMC-6 對齊回歸）
 python3 tests/test_odd_gui_logic.py                   # GUI 純邏輯測試（26 項，headless）
 xvfb-run -a python3 tests/gui_smoke.py                # GUI 實機 smoke（需顯示；headless 用 xvfb）
 ```
@@ -268,6 +268,19 @@ xvfb-run -a python3 tests/gui_smoke.py                # GUI 實機 smoke（需�
 MIT（依專案管理決定；本倉庫初始提交未含授權檔）。
 
 ## 📦 版本與 Release
+
+### v1.2.1 (2026-08-08)
+- **MMC-4 gap closure**：指令矩陣 59 → **69** opcodes，新增 10 指令（MMC-4 未收錄、legacy 碟機仍常見）：
+  - SPC 區塊 5 個：REZERO UNIT (0x01)、RESERVE 6 (0x16)、PREFETCH 10 (0x34)、LOCK/UNLOCK CACHE (0x36)、LOG SENSE (0x4C)
+  - DANGEROUS 區塊 5 個：ERASE 10 (0x2C，抹除媒體區塊)、LOG SELECT (0x4D)、STOP PLAY/SCAN (0x4E)、PLAY AUDIO 12 (0xA5)、SCAN (0xBA)
+- **0x4E 範例語法修正**：STOP PLAY/SCAN CDB 範例修正（10-byte，正確 opcode 名稱對應）
+- **計數同步**：SPC/MMC/DANGEROUS = 21/24/24、dangerous 27 項、TOTAL_PROBE_STEPS 79（69 opcodes + 10 block types）、assertion 134 項；README / version_info / DEBT 一併更新
+
+### v1.2.0 (2026-08-08)
+- **RSOC probe**：新增 MAINTENANCE IN / REPORT SUPPORTED OPERATION CODES（0xA3 SA=0x0C，SPC-3）— 驅動回報自身支援的 opcode 清單，人讀輸出顯示 Drive-Reported Opcodes
+- **MMC-2 FLUSH CACHE coverage**：0x35 更名 SYNCHRONIZE CACHE / FLUSH CACHE（MMC-2 12-byte 變體同 opcode，註解說明涵蓋）
+- **HTML report export**：新增 `--html` 參數，輸出獨立 HTML 報告（report_html.py）
+- 指令矩陣 58 → 59 opcodes（+1 RSOC）
 
 ### v1.1.0 (2026-08-07)
 - **MMC-6 完整對齊**：指令矩陣 45 → **58** opcodes（MMC-6 Table 226/227 全部 48 指令 + 11 legacy），新增 FORMAT UNIT、WRITE AND VERIFY、REPAIR TRACK、READ BUFFER CAPACITY、REPORT LUNS、SECURITY PROTOCOL IN/OUT、SEND KEY、LOAD/UNLOAD MEDIUM、SET READ AHEAD、READ/WRITE (12)、READ MEDIA SERIAL NUMBER、READ CD MSF、MECHANISM STATUS

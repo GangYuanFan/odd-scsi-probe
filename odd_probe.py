@@ -8,10 +8,10 @@ Scans a SCSI/ATAPI optical device and reports:
   * GET CONFIGURATION feature & profile list (CD / DVD / BD / HD-DVD / DDCD)
   * READ DISC INFORMATION media type
   * READ CAPACITY media sector size (drives READ 10 buffer sizing)
-  * Per-opcode support matrix for 58 SCSI commands: full MMC-6 Table 226/227
+  * Per-opcode support matrix for 69 SCSI commands: full MMC-6 Table 226/227
     coverage (48 opcodes; READ CD 0xBE represented by the Table 600 Data
-    Block Type matrix, 10 block types) + 11 legacy commands (SPC-3 extras /
-    MMC Annex E).
+    Block Type matrix, 10 block types) + 21 legacy/extra commands (SPC-3
+    extras / MMC Annex E / MMC-4 gap closure).
   * Per-command data direction (dir: in/out/none) — write-class commands are
     sent with SG_DXFER_TO_DEV / SCSI_IOCTL_DATA_OUT so DOUT opcodes are
     detected correctly.
@@ -153,11 +153,12 @@ ASC_NAMES = {
 }
 
 # ---------------------------------------------------------------------------
-# Command matrix: 58 opcodes = full MMC-6 Table 226/227 coverage (48 opcodes;
-# READ CD 0xBE is represented by the Table 600 block-type matrix below) + 11
-# legacy commands (SPC-3 variants / MMC Annex E) kept for completeness and
-# flagged legacy. CDB templates per MMC-6 rev 2g (T10/1836-D), cross-checked
-# against SPC-3 for the security/read-media-serial opcodes.
+# Command matrix: 69 opcodes = full MMC-6 Table 226/227 coverage (48 opcodes;
+# READ CD 0xBE is represented by the Table 600 block-type matrix below) + 21
+# legacy/extra commands (SPC-3 variants / MMC Annex E / MMC-4 gap closure)
+# kept for completeness and flagged legacy. CDB templates per MMC-6 rev 2g
+# (T10/1836-D), cross-checked against SPC-3 for the security/read-media-serial
+# opcodes.
 #   cdb:  bytes of the CDB template
 #   alloc: data buffer size (0 = no data phase)
 #   dir:  data direction — "in" (device->host buffer), "out" (host->device
@@ -252,7 +253,7 @@ CMDS = [
     {"op": 0xBA, "name": "SCAN", "cat": "DANGEROUS", "cdb": bytes([0xBA, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True, "legacy": True},  # 12-byte
 ]
 
-# Total probe steps = 59 opcodes + 10 READ CD Table 600 block types (69).
+# Total probe steps = 69 opcodes + 10 READ CD Table 600 block types (79).
 # progress_cb totals and the GUI progress bar must use this, not len(CMDS).
 TOTAL_PROBE_STEPS = len(CMDS) + len(CD_BLOCK_TYPE_CODES)
 
@@ -707,7 +708,7 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
 
     # 5) READ CD — probe every valid Data Block Type (MMC Table 600). Each
     #    type is one matrix row (alloc = that type's block size); results are
-    #    merged into the summary and drive the progress bar (55 total steps).
+    #    merged into the summary and drive the progress bar (79 total steps).
     block_type_matrix = []
     for code in CD_BLOCK_TYPE_CODES:
         bt = CD_BLOCK_TYPES[code]

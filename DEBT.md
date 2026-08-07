@@ -15,6 +15,7 @@
 | 2026-08-07 | `odd_probe.py` `probe_device()` | INQUIRY / GET CONFIGURATION / READ DISC INFO / READ CAPACITY 四指令結果快取至指令矩陣（不重發） | 避免重複 ioctl、降低 hang 風險 | 無需升級：設計選擇 | Low |
 | 2026-08-07 | ~~`READ CD` CDB byte1=0x00~~（已解） | 原單一 0xBE 測試項 byte1=0x00，未測 user data | 已由 Table 600 block type 迴圈取代：byte1 = code<<2、user-data types (8-13) byte6=0x10，每 type 各測一次；0xBE 自 opcode 矩陣移除 | 無需升級：已實作 | Low |
 | 2026-08-07 | `odd_probe.py` `probe_device()` READ CD block types | 每裝置多發 10 次 READ CD ioctl（MMC Table 600 各 code 一次） | PM 需求：type 級支援度鑑別（燒錄機 vs 唯讀機）；無 CD media 時成本為 10 次快速 CHECK CONDITION | 若需加速：以 GET CONFIGURATION 的 CD Read feature 存在與否先行過濾 | Low |
+| 2026-08-08 | `odd_probe.py` `CMDS` 0x4D LOG SELECT | 靜態 alloc=0 但 dir=out，靠測試白名單放行（paramlen=0 實際無資料外送） | 安全考量：不帶參數送出（LOG SELECT 帶參數可改寫 drive 的 log 設定）；paramlen=0 時無資料 phase，僅驗證指令存在 | 若要真送資料：runtime 覆寫 alloc（類似 READ 10 的 media block size 覆寫） | Low |
 
 ---
 *Note: All `ponytail:` comments in code must have a corresponding entry here.*
