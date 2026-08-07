@@ -134,7 +134,7 @@ CMDS = [
     {"op": 0x1B, "name": "START STOP UNIT", "cat": "SPC", "cdb": bytes([0x1B, 0x01, 0, 0, 0x01, 0]), "alloc": 0},  # IMMED+START, no LoEJ
     {"op": 0x1E, "name": "PREVENT ALLOW MEDIUM REMOVAL", "cat": "SPC", "cdb": bytes([0x1E, 0, 0, 0, 0x00, 0]), "alloc": 0},  # prevent=0
     {"op": 0x25, "name": "READ CAPACITY", "cat": "SPC", "cdb": bytes([0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 8},
-    {"op": 0x28, "name": "READ 10", "cat": "SPC", "cdb": bytes([0x28, 0, 0, 0, 0, 0, 0, 0x01, 0, 0]), "alloc": 512},  # LBA=0, len=1
+    {"op": 0x28, "name": "READ 10", "cat": "SPC", "cdb": bytes([0x28, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0]), "alloc": 512},  # LBA=0, transfer len=1 block (512B, matches alloc)
     {"op": 0x2B, "name": "SEEK 10", "cat": "SPC", "cdb": bytes([0x2B, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0},
     {"op": 0x2F, "name": "VERIFY 10", "cat": "SPC", "cdb": bytes([0x2F, 0, 0, 0, 0, 0, 0, 0x00, 0, 0]), "alloc": 0},  # BYTCHK=0,len=0
     {"op": 0x35, "name": "SYNCHRONIZE CACHE 10", "cat": "SPC", "cdb": bytes([0x35, 0, 0, 0, 0, 0, 0, 0x00, 0, 0]), "alloc": 0},  # range 0 = no-op
@@ -414,9 +414,10 @@ def parse_get_configuration(data):
     return current_profile, profiles, features
 
 def parse_disc_info(data):
-    if len(data) < 2:
+    """Disc Type lives in byte 8 bits 3-0 (MMC-3 r10g Disc Information block)."""
+    if len(data) <= 8:
         return None
-    return data[1] & 0x0F
+    return data[8] & 0x0F
 
 def name_profile(code):
     return PROFILE_NAMES.get(code, "unknown")
