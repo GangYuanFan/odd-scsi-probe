@@ -11,8 +11,9 @@ USB ODD（光碟機）SCSI command 支援度檢測工具 — 支援 CD / DVD / B
   - **INQUIRY**：Vendor / Product / Revision / Peripheral Device Type / Serial Number (EVPD 0x80)
   - **GET CONFIGURATION**：Current Profile、全部支援 Profile（含 current 標記）、Feature List（49 個內建對照）
   - **READ DISC INFORMATION**：目前碟片 Disc Type（與 current profile 交叉比對）
-  - **指令矩陣**：45 個 opcode（SPC 基礎 + MMC 全格式 + 寫入類）逐指令判定支援度，外加 READ CD Table 600 Data Block Type 支援矩陣（10 種 block type）
+  - **指令矩陣**：58 個 opcode（MMC-6 Table 226/227 完整 48 指令 + 11 個 legacy 指令）逐指令判定支援度，外加 READ CD Table 600 Data Block Type 支援矩陣（10 種 block type）
 - 人類可讀輸出 + `--json` 機器可讀輸出（通過 `python3 -m json.tool` 驗證）
+- **雙模式**：預設 safe 模式（破壞性指令 SKIP）／ `--dangerous` 完整相容性測試模式（所有指令真實發送，見下方說明）
 
 ## 需求
 
@@ -43,7 +44,8 @@ python3 odd_probe.py --device /dev/sg2
 # JSON 輸出（可被 jq 解析）
 python3 odd_probe.py --device /dev/sg2 --json
 
-# 啟用寫入類指令存在性測試（預設關閉）
+# 啟用完整相容性測試模式（產品測試用）：所有指令真實發送，
+# 含 BLANK（抹碟）/ FORMAT（格式化）/ CLOSE TRACK / WRITE / 彈 tray
 python3 odd_probe.py --device /dev/sg2 --dangerous
 
 # 每指令 timeout 秒數（預設 5）
@@ -74,8 +76,8 @@ pythonw odd_probe_gui.py
 ### 操作流程
 
 1. **掃描裝置** → 下拉選單列出候選裝置（Linux: `/dev/sg*` `/dev/sr*`；Windows: `\\.\CdRom*`），選取後「開始檢測」才會啟用
-2. 可選調整：`--dangerous` 勾選（預設關閉；勾選時彈出確認警告，BLANK / CLOSE TRACK 仍永不執行）、Timeout（1-30 秒，預設 5）
-3. **開始檢測** → 背景執行緒執行完整探測，進度列顯示 `x/55`（45 個 opcode + 10 種 READ CD block type），UI 不凍結
+2. 可選調整：`--dangerous` 完整相容性模式勾選（預設關閉；勾選時彈出確認警告，所有指令包含 BLANK / FORMAT / CLOSE TRACK / 彈 tray 皆真實發送）、Timeout（1-30 秒，預設 5）
+3. **開始檢測** → 背景執行緒執行完整探測，進度列顯示 `x/68`（58 個 opcode + 10 種 READ CD block type），UI 不凍結
 4. 結果分四頁顯示：
    - **裝置資訊**：Vendor / Product / Revision / Peripheral Type / Serial / Current Profile / Media Detected
    - **支援格式**：Profile 清單（current 標 `[*]`）+ Feature 清單
@@ -205,8 +207,8 @@ repo 在 WSL 檔案系統時，直接 `cmd.exe /c build.bat` 會遇到兩個坑�
 | 類別 | 數量 | 說明 |
 | --- | --- | --- |
 | SPC | 15 | SCSI Primary Commands 基礎（INQUIRY、MODE SENSE、READ 10 等） |
-| MMC | 17 | 光碟媒體指令（GET CONFIGURATION、READ DISC INFORMATION 等；READ CD 以 block type 矩陣另行探測，見上） |
-| DANGEROUS | 13 | 寫入類（僅 `--dangerous` 時以**無效參數 CDB** 測存在性） |
+| MMC | 24 | 光碟媒體指令（GET CONFIGURATION、READ DISC INFORMATION、REPORT LUNS、SECURITY PROTOCOL IN、READ/WRITE 12、MECHANISM STATUS 等；READ CD 以 block type 矩陣另行探測） |
+| DANGEROUS | 19 | 寫入/破壞性類（僅 `--dangerous` 完整相容性模式時**真實發送**） |
 | READ CD block types | +10 | Table 600 每種 block type 各測一次（併入 summary） |
 
 ### 判定邏輯
@@ -220,13 +222,23 @@ repo 在 WSL 檔案系統時，直接 `cmd.exe /c build.bat` 會遇到兩個坑�
 | ⏱️ TIMEOUT | ioctl 逾時（SG_IO 逾時回 EIO） |
 | ⚠️ OTHER | 其他 sense（附完整 sense hex） |
 
-## ⚠️ 安全紅線（不可妥協）
+## ⚠️ 測試模式與安全設計（v1.1.0，產品廠商導向）
 
-1. **BLANK (0xA1) 與 CLOSE TRACK/SESSION (0x5B / 0x56) 永遠不發送**，即使 `--dangerous` 也一樣 — 結果標示 `🔒 SKIPPED (unsafe to test)`
-2. PLAY AUDIO MSF (0x47) / PLAY AUDIO TRACK INDEX (0x48) 無法以無害參數測試（會真的播放），**永遠不發送**
-3. 其他寫入類指令（WRITE 10 / MODE SELECT / WRITE BUFFER / SEND KEY 等）僅在 `--dangerous` 時以**零長度或無效參數 CDB** 測 opcode 存在性（如 WRITE 10 用 transfer len=0 → 回 INVALID FIELD 即證明存在，不實際寫入）
-4. 所有指令 timeout 預設 5 秒，防止裝置 hang
-5. 不載入/退出 tray（不設 LoEJ）、不格式化、不寫 media
+**兩種模式：**
+
+| 模式 | 行為 | 用途 |
+| --- | --- | --- |
+| 預設（safe） | 破壞性指令顯示 `🔒 SKIPPED` + 提示 `--dangerous full-compat mode not enabled`；讀取/查詢指令照常真實測試 | 一般使用（避免誤抹資料碟） |
+| `--dangerous`（完整相容性） | **所有指令真實發送**：BLANK 抹碟、FORMAT UNIT 格式化、CLOSE TRACK/SESSION 關閉 session、LOAD/UNLOAD 彈 tray、WRITE 10/12 寫入資料、SEND OPC / SEND KEY / SEND CUE SHEET / SEND DISC STRUCTURE / SECURITY PROTOCOL OUT / REPAIR TRACK / SET STREAMING / MODE SELECT 真實參數 | **USB ODD 產品相容性測試（老闆需求）** |
+
+**唯一例外（永遠不執行）：**
+
+- **WRITE BUFFER (0x3B) 的 firmware download / update mode（0x05 / 0x0F / 0x0A 等）** — 磚機風險，對相容性測試無意義；WRITE BUFFER 以 mode 0x00（device buffer）測試
+
+其他設計：
+1. 所有指令 timeout 預設 5 秒，防止裝置 hang
+2. 每指令標註 data direction（`dir: in/out/none`），寫入類以正確的 `SG_DXFER_TO_DEV` / `SCSI_IOCTL_DATA_OUT` 發送，不會因方向錯誤誤判
+3. 報告標題顯示測試模式（`FULL COMPATIBILITY TEST MODE (--dangerous)`），JSON 輸出含 `"mode": "full-compat" | "safe"`
 
 ## 平台實作
 
@@ -240,13 +252,14 @@ repo 在 WSL 檔案系統時，直接 `cmd.exe /c build.bat` 會遇到兩個坑�
 - 本機開發環境為 WSL2 虛擬 SCSI（無真實光碟機），GET CONFIGURATION / DISC INFO 解析以單元測試（構造資料）驗證 — 建議以真實 ODD（如 BD-RE 燒錄機）複測
 - sense buffer 使用 32B（非最小 8B）：分類邏輯需要 ASC/ASCQ（offset 12/13）
 - `list` 模式對每個裝置發 INQUIRY；無法開啟（如無權限）的裝置會顯示 `(unavailable: 原因)` 並繼續，不會中斷
+- 完整相容性模式（--dangerous）會在可寫媒體上真實執行 BLANK / FORMAT / WRITE — **使用前請確認測試片可犧牲**
 
 ## 開發
 
 ```bash
 python3 -m py_compile odd_probe.py odd_probe_gui.py   # 語法驗證
-python3 tests/test_odd_assertions.py                  # Logic Assertion（105 項，含 B1-B6 + Table 600 回歸）
-python3 tests/test_odd_gui_logic.py                   # GUI 純邏輯測試（22 項，headless）
+python3 tests/test_odd_assertions.py                  # Logic Assertion（128 項，含 MMC-6 對齊回歸）
+python3 tests/test_odd_gui_logic.py                   # GUI 純邏輯測試（26 項，headless）
 xvfb-run -a python3 tests/gui_smoke.py                # GUI 實機 smoke（需顯示；headless 用 xvfb）
 ```
 
@@ -255,6 +268,13 @@ xvfb-run -a python3 tests/gui_smoke.py                # GUI 實機 smoke（需�
 MIT（依專案管理決定；本倉庫初始提交未含授權檔）。
 
 ## 📦 版本與 Release
+
+### v1.1.0 (2026-08-07)
+- **MMC-6 完整對齊**：指令矩陣 45 → **58** opcodes（MMC-6 Table 226/227 全部 48 指令 + 11 legacy），新增 FORMAT UNIT、WRITE AND VERIFY、REPAIR TRACK、READ BUFFER CAPACITY、REPORT LUNS、SECURITY PROTOCOL IN/OUT、SEND KEY、LOAD/UNLOAD MEDIUM、SET READ AHEAD、READ/WRITE (12)、READ MEDIA SERIAL NUMBER、READ CD MSF、MECHANISM STATUS
+- **CDB 錯誤修正**：0xA0 由 REPORT KEY 改為 **REPORT LUNS**；0xA2 由 SEND KEY 改為 **SECURITY PROTOCOL IN**；新增 0xA3 SEND KEY（12-byte）；12-byte/16-byte CDB 支援；全部指令 CDB 依 spec 複查
+- **data direction 修正**：新增 `dir: in/out/none` 欄位，`SG_DXFER_TO_DEV` / `SCSI_IOCTL_DATA_OUT` 支援，寫入類指令不再因方向錯誤而 EINVAL
+- **完整相容性測試模式**（產品廠商需求）：`--dangerous` 下所有指令真實發送（BLANK 抹碟 / FORMAT / CLOSE TRACK / 彈 tray / WRITE 寫入）；唯一例外 WRITE BUFFER firmware mode
+- sector size 動態處理維持（READ 10/12 依 READ CAPACITY block size 對齊）
 
 ### v1.0.0 (2026-08-07)
 - 首發版。USB ODD SCSI command 支援度檢測工具。

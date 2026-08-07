@@ -8,8 +8,13 @@ Scans a SCSI/ATAPI optical device and reports:
   * GET CONFIGURATION feature & profile list (CD / DVD / BD / HD-DVD / DDCD)
   * READ DISC INFORMATION media type
   * READ CAPACITY media sector size (drives READ 10 buffer sizing)
-  * Per-opcode support matrix for 45 SCSI commands + READ CD Table 600
-    Data Block Type matrix (10 block types, safe probes only)
+  * Per-opcode support matrix for 58 SCSI commands: full MMC-6 Table 226/227
+    coverage (48 opcodes; READ CD 0xBE represented by the Table 600 Data
+    Block Type matrix, 10 block types) + 11 legacy commands (SPC-3 extras /
+    MMC Annex E).
+  * Per-command data direction (dir: in/out/none) — write-class commands are
+    sent with SG_DXFER_TO_DEV / SCSI_IOCTL_DATA_OUT so DOUT opcodes are
+    detected correctly.
 
 Zero third-party dependencies — pure Python stdlib (ctypes / struct / os / ...).
 
@@ -17,15 +22,22 @@ Usage:
   python3 odd_probe.py list                              # list SCSI/optical devices
   python3 odd_probe.py --device /dev/sr0                 # full probe, human output
   python3 odd_probe.py --device /dev/sg2 --json          # machine-readable JSON
-  python3 odd_probe.py --device /dev/sg2 --dangerous     # enable write-class opcode probes
+  python3 odd_probe.py --device /dev/sg2 --dangerous     # FULL COMPATIBILITY mode:
+                                                         # sends every command with
+                                                         # real parameters (BLANK /
+                                                         # FORMAT / WRITE / eject ...)
   python3 odd_probe.py --device /dev/sg2 --timeout 5     # per-command timeout (s)
 
-Safety red lines (never compromise):
-  * BLANK (0xA1) and CLOSE TRACK/SESSION (0x5B / 0x56) are NEVER sent,
-    even with --dangerous.
-  * Write-class commands are probed with zero-length / invalid parameter
-    CDBs only, so no media is ever written.
-  * No tray load/eject (no LoEJ), no formatting, no media writing.
+Modes (per product owner):
+  * default (safe):   destructive commands are SKIPPED with a hint to use
+                      --dangerous; read/inquiry commands run for real.
+  * --dangerous:      FULL COMPATIBILITY TESTING — every command is sent with
+                      real parameters, including BLANK (erases disc), FORMAT
+                      UNIT (formats media), CLOSE TRACK/SESSION, LOAD/UNLOAD
+                      (operates the tray) and WRITE commands (real data).
+  * Sole exception:   WRITE BUFFER (0x3B) never uses firmware download/update
+                      modes (0x05/0x0F/0x0A ...) — bricking risk, no value for
+                      compatibility testing; other modes (e.g. 0x00) are used.
 """
 
 import argparse
@@ -141,67 +153,93 @@ ASC_NAMES = {
 }
 
 # ---------------------------------------------------------------------------
-# Command matrix: 45 opcodes covering SPC + MMC (all disc formats). READ CD
-# (0xBE) is deliberately absent: it is expanded at probe time into the Table
-# 600 Data Block Type matrix (10 types, see CD_BLOCK_TYPES / _read_cd_cdb).
-#   cdb: bytes of the CDB template; alloc: data-in buffer size (0 = none)
-#   unsafe: never send (destructive / would actually play audio)
-#   dangerous: only sent when --dangerous, with inert parameter CDBs
+# Command matrix: 58 opcodes = full MMC-6 Table 226/227 coverage (48 opcodes;
+# READ CD 0xBE is represented by the Table 600 block-type matrix below) + 11
+# legacy commands (SPC-3 variants / MMC Annex E) kept for completeness and
+# flagged legacy. CDB templates per MMC-6 rev 2g (T10/1836-D), cross-checked
+# against SPC-3 for the security/read-media-serial opcodes.
+#   cdb:  bytes of the CDB template
+#   alloc: data buffer size (0 = no data phase)
+#   dir:  data direction — "in" (device->host buffer), "out" (host->device
+#         buffer), "none" (no data phase)
+#   dangerous: only sent when --dangerous, then with REAL parameters
+#   legacy: not in MMC-6 Table 226/227 (SPC-3 extra / Annex E obsolete)
 # ---------------------------------------------------------------------------
+MMC6_OPCODES = frozenset((
+    0x00, 0x03, 0x04, 0x12, 0x1B, 0x1E, 0x23, 0x25, 0x28, 0x2A,
+    0x2B, 0x2E, 0x2F, 0x35, 0x3B, 0x3C, 0x43, 0x46, 0x4A, 0x51,
+    0x52, 0x53, 0x54, 0x55, 0x58, 0x5A, 0x5B, 0x5C, 0x5D, 0xA0,
+    0xA1, 0xA2, 0xA3, 0xA4, 0xA6, 0xA7, 0xA8, 0xAA, 0xAB, 0xAC,
+    0xAD, 0xB5, 0xB6, 0xB9, 0xBB, 0xBD, 0xBE, 0xBF,
+))
+
 CMDS = [
-    # ---- SPC base ----
-    {"op": 0x00, "name": "TEST UNIT READY", "cat": "SPC", "cdb": bytes([0x00, 0, 0, 0, 0, 0]), "alloc": 0},
-    {"op": 0x03, "name": "REQUEST SENSE", "cat": "SPC", "cdb": bytes([0x03, 0, 0, 0, 0x12, 0]), "alloc": 18},
-    {"op": 0x12, "name": "INQUIRY", "cat": "SPC", "cdb": bytes([0x12, 0, 0, 0, 0x60, 0]), "alloc": 96},
-    {"op": 0x1A, "name": "MODE SENSE 6", "cat": "SPC", "cdb": bytes([0x1A, 0, 0x3F, 0, 0xFF, 0]), "alloc": 255},
-    {"op": 0x1B, "name": "START STOP UNIT", "cat": "SPC", "cdb": bytes([0x1B, 0x01, 0, 0, 0x01, 0]), "alloc": 0},  # IMMED+START, no LoEJ
-    {"op": 0x1E, "name": "PREVENT ALLOW MEDIUM REMOVAL", "cat": "SPC", "cdb": bytes([0x1E, 0, 0, 0, 0x00, 0]), "alloc": 0},  # prevent=0
-    {"op": 0x25, "name": "READ CAPACITY", "cat": "SPC", "cdb": bytes([0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 8},
-    {"op": 0x28, "name": "READ 10", "cat": "SPC", "cdb": bytes([0x28, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0]), "alloc": 512},  # LBA=0, transfer len=1 block; alloc overridden at runtime to media block size (READ CAPACITY) or 2352 fallback
-    {"op": 0x2B, "name": "SEEK 10", "cat": "SPC", "cdb": bytes([0x2B, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0},
-    {"op": 0x2F, "name": "VERIFY 10", "cat": "SPC", "cdb": bytes([0x2F, 0, 0, 0, 0, 0, 0, 0x00, 0, 0]), "alloc": 0},  # BYTCHK=0,len=0
-    {"op": 0x35, "name": "SYNCHRONIZE CACHE 10", "cat": "SPC", "cdb": bytes([0x35, 0, 0, 0, 0, 0, 0, 0x00, 0, 0]), "alloc": 0},  # range 0 = no-op
-    {"op": 0x3C, "name": "READ BUFFER", "cat": "SPC", "cdb": bytes([0x3C, 0x00, 0x00, 0, 0, 0, 0x00, 0x04, 0, 0]), "alloc": 4},  # mode 0 capacity header
-    {"op": 0x5A, "name": "MODE SENSE 10", "cat": "SPC", "cdb": bytes([0x5A, 0, 0x3F, 0, 0, 0, 0, 0, 0xFF, 0xFF]), "alloc": 65535},
-    {"op": 0x1C, "name": "RECEIVE DIAGNOSTIC RESULTS", "cat": "SPC", "cdb": bytes([0x1C, 0, 0x00, 0x00, 0x04, 0]), "alloc": 4},
-    {"op": 0x1D, "name": "SEND DIAGNOSTIC", "cat": "SPC", "cdb": bytes([0x1D, 0, 0, 0, 0, 0]), "alloc": 0},  # self-test=0
+    # ---- SPC base (MMC-6 references SPC-3) ----
+    {"op": 0x00, "name": "TEST UNIT READY", "cat": "SPC", "cdb": bytes([0x00, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none"},
+    {"op": 0x03, "name": "REQUEST SENSE", "cat": "SPC", "cdb": bytes([0x03, 0, 0, 0, 0x12, 0]), "alloc": 18, "dir": "in"},
+    {"op": 0x12, "name": "INQUIRY", "cat": "SPC", "cdb": bytes([0x12, 0, 0, 0, 0x60, 0]), "alloc": 96, "dir": "in"},
+    {"op": 0x1A, "name": "MODE SENSE 6", "cat": "SPC", "cdb": bytes([0x1A, 0, 0x3F, 0, 0xFF, 0]), "alloc": 255, "dir": "in"},
+    {"op": 0x1B, "name": "START STOP UNIT", "cat": "SPC", "cdb": bytes([0x1B, 0x01, 0, 0, 0x01, 0]), "alloc": 0, "dir": "none"},  # IMMED+START, no LoEJ
+    {"op": 0x1E, "name": "PREVENT ALLOW MEDIUM REMOVAL", "cat": "SPC", "cdb": bytes([0x1E, 0, 0, 0, 0x00, 0]), "alloc": 0, "dir": "none"},  # prevent=0
+    {"op": 0x25, "name": "READ CAPACITY", "cat": "SPC", "cdb": bytes([0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 8, "dir": "in"},
+    {"op": 0x28, "name": "READ 10", "cat": "SPC", "cdb": bytes([0x28, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0]), "alloc": 0, "dir": "in"},  # alloc overridden at runtime: media block size (READ CAPACITY) or 2352 fallback
+    {"op": 0x2B, "name": "SEEK 10", "cat": "SPC", "cdb": bytes([0x2B, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none"},
+    {"op": 0x2F, "name": "VERIFY 10", "cat": "SPC", "cdb": bytes([0x2F, 0, 0, 0, 0, 0, 0, 0x00, 0, 0]), "alloc": 0, "dir": "none"},  # BYTCHK=0,len=0
+    {"op": 0x35, "name": "SYNCHRONIZE CACHE 10", "cat": "SPC", "cdb": bytes([0x35, 0, 0, 0, 0, 0, 0, 0x00, 0, 0]), "alloc": 0, "dir": "none"},  # range 0 = no-op
+    {"op": 0x3C, "name": "READ BUFFER", "cat": "SPC", "cdb": bytes([0x3C, 0x00, 0x00, 0, 0, 0, 0x00, 0x04, 0, 0]), "alloc": 4, "dir": "in"},  # mode 0 capacity header
+    {"op": 0x5A, "name": "MODE SENSE 10", "cat": "SPC", "cdb": bytes([0x5A, 0, 0x3F, 0, 0, 0, 0, 0, 0xFF, 0xFF]), "alloc": 65535, "dir": "in"},
+    {"op": 0x1C, "name": "RECEIVE DIAGNOSTIC RESULTS", "cat": "SPC", "cdb": bytes([0x1C, 0, 0x00, 0x00, 0x04, 0]), "alloc": 4, "dir": "in"},
+    {"op": 0x1D, "name": "SEND DIAGNOSTIC", "cat": "SPC", "cdb": bytes([0x1D, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none"},  # self-test=0
 
-    # ---- MMC optical commands (all formats) ----
-    {"op": 0x23, "name": "READ FORMAT CAPACITIES", "cat": "MMC", "cdb": bytes([0x23, 0, 0, 0, 0, 0, 0x00, 0xFF, 0, 0]), "alloc": 255},
-    {"op": 0x42, "name": "READ SUBCHANNEL", "cat": "MMC", "cdb": bytes([0x42, 0, 0x40, 0x01, 0, 0, 0x00, 0x20, 0, 0]), "alloc": 32},
-    {"op": 0x43, "name": "READ TOC/PMA/ATIP", "cat": "MMC", "cdb": bytes([0x43, 0, 0, 0x00, 0, 0x00, 0x10, 0x00, 0, 0]), "alloc": 4096},
-    {"op": 0x44, "name": "READ HEADER", "cat": "MMC", "cdb": bytes([0x44, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x20]), "alloc": 32},
-    {"op": 0x45, "name": "PLAY AUDIO 10", "cat": "MMC", "cdb": bytes([0x45, 0, 0, 0, 0, 0, 0x00, 0x00, 0, 0]), "alloc": 0},  # len=0, no playback
-    {"op": 0x46, "name": "GET CONFIGURATION", "cat": "MMC", "cdb": bytes([0x46, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), "alloc": 65535},
-    {"op": 0x47, "name": "PLAY AUDIO MSF", "cat": "MMC", "cdb": bytes([0x47, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "unsafe": "would actually play audio"},
-    {"op": 0x48, "name": "PLAY AUDIO TRACK INDEX", "cat": "MMC", "cdb": bytes([0x48, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "unsafe": "would actually play audio"},
-    {"op": 0x4A, "name": "GET EVENT STATUS NOTIFICATION", "cat": "MMC", "cdb": bytes([0x4A, 0x01, 0x00, 0, 0, 0, 0x00, 0x08, 0, 0]), "alloc": 8},
-    {"op": 0x4B, "name": "PAUSE/RESUME", "cat": "MMC", "cdb": bytes([0x4B, 0, 0, 0, 0, 0, 0, 0, 0x00, 0]), "alloc": 0},  # resume=0 -> pause
-    {"op": 0x51, "name": "READ DISC INFORMATION", "cat": "MMC", "cdb": bytes([0x51, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), "alloc": 65535},
-    {"op": 0x52, "name": "READ TRACK INFORMATION", "cat": "MMC", "cdb": bytes([0x52, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), "alloc": 65535},
-    {"op": 0xA0, "name": "REPORT KEY", "cat": "MMC", "cdb": bytes([0xA0, 0, 0x00, 0, 0, 0, 0, 0, 0x08, 0]), "alloc": 8},  # legacy class 0
-    {"op": 0xA4, "name": "REPORT KEY", "cat": "MMC", "cdb": bytes([0xA4, 0, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x08, 0, 0]), "alloc": 8},
-    {"op": 0xAC, "name": "GET PERFORMANCE", "cat": "MMC", "cdb": bytes([0xAC, 0, 0x00, 0, 0, 0, 0, 0, 0x00, 0x01, 0, 0, 0x00, 0x20, 0, 0]), "alloc": 32},
-    {"op": 0xAD, "name": "READ DVD STRUCTURE", "cat": "MMC", "cdb": bytes([0xAD, 0, 0x00, 0, 0, 0, 0, 0x00, 0x08, 0x00, 0, 0]), "alloc": 2048},
-    {"op": 0xBB, "name": "SET CD SPEED", "cat": "MMC", "cdb": bytes([0xBB, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0]), "alloc": 0},  # max speed
+    # ---- MMC optical commands (all disc formats, MMC-6 rev 2g) ----
+    {"op": 0x23, "name": "READ FORMAT CAPACITIES", "cat": "MMC", "cdb": bytes([0x23, 0, 0, 0, 0, 0, 0x00, 0xFF, 0, 0]), "alloc": 255, "dir": "in"},
+    {"op": 0x42, "name": "READ SUBCHANNEL", "cat": "MMC", "cdb": bytes([0x42, 0, 0x40, 0x01, 0, 0, 0x00, 0x20, 0, 0]), "alloc": 32, "dir": "in", "legacy": True},  # Annex E
+    {"op": 0x43, "name": "READ TOC/PMA/ATIP", "cat": "MMC", "cdb": bytes([0x43, 0, 0, 0x00, 0, 0x00, 0x10, 0x00, 0, 0]), "alloc": 4096, "dir": "in"},
+    {"op": 0x44, "name": "READ HEADER", "cat": "MMC", "cdb": bytes([0x44, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x20]), "alloc": 32, "dir": "in", "legacy": True},  # Annex E
+    {"op": 0x45, "name": "PLAY AUDIO 10", "cat": "MMC", "cdb": bytes([0x45, 0, 0, 0, 0, 0, 0x00, 0x01, 0, 0]), "alloc": 0, "dir": "none", "legacy": True, "dangerous": True},  # real play in --dangerous
+    {"op": 0x46, "name": "GET CONFIGURATION", "cat": "MMC", "cdb": bytes([0x46, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), "alloc": 65535, "dir": "in"},
+    {"op": 0x47, "name": "PLAY AUDIO MSF", "cat": "MMC", "cdb": bytes([0x47, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "legacy": True, "dangerous": True},
+    {"op": 0x48, "name": "PLAY AUDIO TRACK INDEX", "cat": "MMC", "cdb": bytes([0x48, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "legacy": True, "dangerous": True},
+    {"op": 0x4A, "name": "GET EVENT STATUS NOTIFICATION", "cat": "MMC", "cdb": bytes([0x4A, 0x01, 0x00, 0, 0, 0, 0x00, 0x08, 0, 0]), "alloc": 8, "dir": "in"},
+    {"op": 0x4B, "name": "PAUSE/RESUME", "cat": "MMC", "cdb": bytes([0x4B, 0, 0, 0, 0, 0, 0, 0, 0x00, 0]), "alloc": 0, "dir": "none", "legacy": True},  # resume=0 -> pause; Annex E
+    {"op": 0x51, "name": "READ DISC INFORMATION", "cat": "MMC", "cdb": bytes([0x51, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), "alloc": 65535, "dir": "in"},
+    {"op": 0x52, "name": "READ TRACK INFORMATION", "cat": "MMC", "cdb": bytes([0x52, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), "alloc": 65535, "dir": "in"},
+    {"op": 0xA0, "name": "REPORT LUNS", "cat": "MMC", "cdb": bytes([0xA0, 0, 0, 0, 0x00, 0x10]), "alloc": 16, "dir": "in"},  # MMC-6 6.29 (was wrongly labeled REPORT KEY)
+    {"op": 0xA2, "name": "SECURITY PROTOCOL IN", "cat": "MMC", "cdb": bytes([0xA2, 0x06, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0, 0]), "alloc": 16, "dir": "in"},  # protocol 06h OSSC (6.32); was wrongly labeled SEND KEY
+    {"op": 0xA4, "name": "REPORT KEY", "cat": "MMC", "cdb": bytes([0xA4, 0, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x08, 0, 0]), "alloc": 8, "dir": "in"},  # key class 0
+    {"op": 0xAC, "name": "GET PERFORMANCE", "cat": "MMC", "cdb": bytes([0xAC, 0, 0x00, 0, 0, 0, 0, 0, 0x00, 0x01, 0, 0, 0x00, 0x20, 0, 0]), "alloc": 32, "dir": "in"},
+    {"op": 0xAD, "name": "READ DVD STRUCTURE", "cat": "MMC", "cdb": bytes([0xAD, 0, 0x00, 0, 0, 0, 0, 0x00, 0x08, 0x00, 0, 0]), "alloc": 2048, "dir": "in"},  # format 0 = physical
+    {"op": 0xA8, "name": "READ 12", "cat": "MMC", "cdb": bytes([0xA8, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0, 0]), "alloc": 0, "dir": "in"},  # LBA=0, len=1; alloc runtime
+    {"op": 0xAB, "name": "READ MEDIA SERIAL NUMBER", "cat": "MMC", "cdb": bytes([0xAB, 0x01, 0, 0, 0, 0, 0, 0, 0, 0x80, 0, 0]), "alloc": 128, "dir": "in"},  # SERVICE ACTION IN (12) SA=01h
+    {"op": 0xB9, "name": "READ CD MSF", "cat": "MMC", "cdb": bytes([0xB9, 0x00, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x10, 0x00, 0]), "alloc": 2352, "dir": "in"},  # MSF 0:0:0 -> 0:0:1, user data
+    {"op": 0xBD, "name": "MECHANISM STATUS", "cat": "MMC", "cdb": bytes([0xBD, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x0C, 0, 0]), "alloc": 12, "dir": "in"},
+    {"op": 0xBB, "name": "SET CD SPEED", "cat": "MMC", "cdb": bytes([0xBB, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none"},  # max speed
+    {"op": 0x5C, "name": "READ BUFFER CAPACITY", "cat": "MMC", "cdb": bytes([0x5C, 0x00, 0, 0, 0, 0, 0, 0x00, 0x0C, 0]), "alloc": 12, "dir": "in"},  # Block=0, alloc 12
+    {"op": 0xA7, "name": "SET READ AHEAD", "cat": "MMC", "cdb": bytes([0xA7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none"},  # trigger LBA 0, read-ahead LBA 0
 
-    # ---- write-class (dangerous, default skipped; inert parameter CDBs only) ----
-    {"op": 0x15, "name": "MODE SELECT 6", "cat": "DANGEROUS", "cdb": bytes([0x15, 0, 0x00, 0x00, 0x00, 0x00]), "alloc": 0, "dangerous": True},  # paramlen=0
-    {"op": 0x2A, "name": "WRITE 10", "cat": "DANGEROUS", "cdb": bytes([0x2A, 0, 0, 0, 0, 0, 0, 0x00, 0, 0]), "alloc": 0, "dangerous": True},  # len=0, no write
-    {"op": 0x3B, "name": "WRITE BUFFER", "cat": "DANGEROUS", "cdb": bytes([0x3B, 0x00, 0x00, 0, 0, 0, 0x00, 0x00, 0, 0]), "alloc": 0, "dangerous": True},  # len=0
-    {"op": 0x53, "name": "RESERVE TRACK", "cat": "DANGEROUS", "cdb": bytes([0x53, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0]), "alloc": 0, "dangerous": True},  # invalid track
-    {"op": 0x54, "name": "SEND OPC INFORMATION", "cat": "DANGEROUS", "cdb": bytes([0x54, 0x00, 0, 0, 0, 0, 0, 0x00, 0x00, 0]), "alloc": 0, "dangerous": True},  # paramlen=0
-    {"op": 0x55, "name": "MODE SELECT 10", "cat": "DANGEROUS", "cdb": bytes([0x55, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0]), "alloc": 0, "dangerous": True},  # paramlen=0
-    {"op": 0x56, "name": "CLOSE TRACK/SESSION (old)", "cat": "DANGEROUS", "cdb": bytes([0x56, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "unsafe": "closes session/track"},
-    {"op": 0x5B, "name": "CLOSE TRACK/SESSION", "cat": "DANGEROUS", "cdb": bytes([0x5B, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "unsafe": "closes session/track"},
-    {"op": 0x5D, "name": "SEND CUE SHEET", "cat": "DANGEROUS", "cdb": bytes([0x5D, 0, 0x00, 0, 0, 0, 0, 0, 0x00, 0x00]), "alloc": 0, "dangerous": True},  # paramlen=0
-    {"op": 0xA1, "name": "BLANK", "cat": "DANGEROUS", "cdb": bytes([0xA1, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "unsafe": "erases entire disc"},
-    {"op": 0xA2, "name": "SEND KEY", "cat": "DANGEROUS", "cdb": bytes([0xA2, 0, 0x00, 0, 0, 0, 0, 0, 0x00, 0]), "alloc": 0, "dangerous": True},  # paramlen=0
-    {"op": 0xB6, "name": "SET STREAMING", "cat": "DANGEROUS", "cdb": bytes([0xB6, 0, 0, 0, 0, 0, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dangerous": True},  # paramlen=0
-    {"op": 0xBF, "name": "SEND DVD STRUCTURE", "cat": "DANGEROUS", "cdb": bytes([0xBF, 0x00, 0x00, 0, 0, 0, 0, 0x00, 0, 0, 0, 0, 0x00, 0x00, 0, 0]), "alloc": 0, "dangerous": True},  # paramlen=0
+    # ---- Write-class / destructive (--dangerous only; then sent with REAL parameters) ----
+    {"op": 0x04, "name": "FORMAT UNIT", "cat": "DANGEROUS", "cdb": bytes([0x04, 0x11, 0, 0, 0, 0]), "alloc": 12, "dir": "out", "dangerous": True, "danger_note": "formats media (FMTDATA=1, full format)"},
+    {"op": 0x15, "name": "MODE SELECT 6", "cat": "DANGEROUS", "cdb": bytes([0x15, 0, 0x00, 0x00, 0x00, 0]), "alloc": 0, "dir": "out", "dangerous": True},  # paramlen=0
+    {"op": 0x2A, "name": "WRITE 10", "cat": "DANGEROUS", "cdb": bytes([0x2A, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0]), "alloc": 0, "dir": "out", "dangerous": True, "danger_note": "writes 1 block at LBA 0"},  # alloc runtime (block size)
+    {"op": 0x2E, "name": "WRITE AND VERIFY 10", "cat": "DANGEROUS", "cdb": bytes([0x2E, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0]), "alloc": 0, "dir": "out", "dangerous": True, "danger_note": "writes + verifies 1 block at LBA 0"},
+    {"op": 0x3B, "name": "WRITE BUFFER", "cat": "DANGEROUS", "cdb": bytes([0x3B, 0x00, 0x00, 0, 0, 0, 0x00, 0x00, 0, 0]), "alloc": 8, "dir": "out", "dangerous": True, "danger_note": "mode 0x00 device buffer only — firmware modes NEVER used"},
+    {"op": 0x53, "name": "RESERVE TRACK", "cat": "DANGEROUS", "cdb": bytes([0x53, 0x01, 0, 0, 0x00, 0x01, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True},  # ARSV=1, track 1
+    {"op": 0x54, "name": "SEND OPC INFORMATION", "cat": "DANGEROUS", "cdb": bytes([0x54, 0x01, 0, 0, 0, 0, 0, 0x00, 0x00, 0]), "alloc": 0, "dir": "none", "dangerous": True},  # DoOpc=1
+    {"op": 0x55, "name": "MODE SELECT 10", "cat": "DANGEROUS", "cdb": bytes([0x55, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0]), "alloc": 0, "dir": "out", "dangerous": True},  # paramlen=0
+    {"op": 0x56, "name": "CLOSE TRACK/SESSION (old)", "cat": "DANGEROUS", "cdb": bytes([0x56, 0x01, 0x02, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True, "legacy": True, "danger_note": "closes session (MMC-2 legacy opcode)"},
+    {"op": 0x58, "name": "REPAIR TRACK", "cat": "DANGEROUS", "cdb": bytes([0x58, 0x01, 0, 0, 0x00, 0x01, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True},  # Immed=1, track 1
+    {"op": 0x5B, "name": "CLOSE TRACK/SESSION", "cat": "DANGEROUS", "cdb": bytes([0x5B, 0x01, 0x02, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True, "danger_note": "closes session / finalizes disc"},
+    {"op": 0x5D, "name": "SEND CUE SHEET", "cat": "DANGEROUS", "cdb": bytes([0x5D, 0, 0, 0, 0, 0, 0x00, 0x04, 0, 0]), "alloc": 4, "dir": "out", "dangerous": True},  # cue sheet size 4
+    {"op": 0xA1, "name": "BLANK", "cat": "DANGEROUS", "cdb": bytes([0xA1, 0x10, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True, "danger_note": "erases entire disc (blank type 000b, Immed=1)"},
+    {"op": 0xA3, "name": "SEND KEY", "cat": "DANGEROUS", "cdb": bytes([0xA3, 0, 0, 0, 0, 0, 0x00, 0x00, 0x00, 0x08, 0x00, 0]), "alloc": 8, "dir": "out", "dangerous": True},  # 12-byte; Function 0, KeyClass 0 (CSS), param len 8
+    {"op": 0xA6, "name": "LOAD/UNLOAD MEDIUM", "cat": "DANGEROUS", "cdb": bytes([0xA6, 0x01, 0, 0, 0x02, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True, "danger_note": "operates the tray (unload/eject)"},
+    {"op": 0xAA, "name": "WRITE 12", "cat": "DANGEROUS", "cdb": bytes([0xAA, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0, 0]), "alloc": 0, "dir": "out", "dangerous": True, "danger_note": "writes 1 block at LBA 0"},  # alloc runtime
+    {"op": 0xB5, "name": "SECURITY PROTOCOL OUT", "cat": "DANGEROUS", "cdb": bytes([0xB5, 0x06, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0, 0]), "alloc": 4, "dir": "out", "dangerous": True},  # protocol 06h OSSC, param len 4
+    {"op": 0xB6, "name": "SET STREAMING", "cat": "DANGEROUS", "cdb": bytes([0xB6, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x14, 0]), "alloc": 20, "dir": "out", "dangerous": True},  # Type 0 = performance descriptor (20 B)
+    {"op": 0xBF, "name": "SEND DISC STRUCTURE", "cat": "DANGEROUS", "cdb": bytes([0xBF, 0x00, 0, 0, 0, 0, 0, 0x00, 0x00, 0x04, 0x00, 0]), "alloc": 4, "dir": "out", "dangerous": True},  # media type 0 (DVD), format code 0, param len 4
 ]
 
-# Total probe steps = 45 opcodes + 10 READ CD Table 600 block types (55).
+# Total probe steps = 58 opcodes + 10 READ CD Table 600 block types (68).
 # progress_cb totals and the GUI progress bar must use this, not len(CMDS).
 TOTAL_PROBE_STEPS = len(CMDS) + len(CD_BLOCK_TYPE_CODES)
 
@@ -238,12 +276,25 @@ if os.name == "posix":
             ("info", ctypes.c_uint),
         ]
 
-    def scsi_execute(path, cdb, alloc, timeout_s):
-        """Run one SCSI command via SG_IO. Returns (status, sense_bytes, data_bytes, err_str)."""
-        dxfer_dir = SG_DXFER_FROM_DEV if alloc > 0 else SG_DXFER_NONE
+    def scsi_execute(path, cdb, alloc, timeout_s, direction="in", out_data=b""):
+        """Run one SCSI command via SG_IO. Returns (status, sense_bytes, data_bytes, err_str).
+
+        direction: "in" (device->host buffer), "out" (host->device buffer),
+        "none" (no data phase). out_data: payload for "out" commands (default
+        zero-filled). alloc==0 always implies no data phase.
+        """
+        if alloc > 0 and direction == "out":
+            dxfer_dir = SG_DXFER_TO_DEV
+        elif alloc > 0:
+            dxfer_dir = SG_DXFER_FROM_DEV
+        else:
+            dxfer_dir = SG_DXFER_NONE
         cdb_buf = ctypes.create_string_buffer(bytes(cdb), len(cdb))
         sense_buf = ctypes.create_string_buffer(32)  # 32B: classification needs ASC/ASCQ at 12/13
         data_buf = ctypes.create_string_buffer(max(alloc, 1)) if alloc > 0 else None
+        if data_buf is not None and direction == "out":
+            fill = bytes(out_data[:alloc]) if out_data else b"\x00" * alloc
+            data_buf[:len(fill)] = fill
         hdr = SgIoHdr()
         hdr.interface_id = ord("S")
         hdr.dxfer_direction = dxfer_dir
@@ -328,10 +379,16 @@ if os.name == "nt":
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     _configure_windows_ctypes(kernel32)
 
-    def scsi_execute(path, cdb, alloc, timeout_s):
-        """Run one SCSI command via IOCTL_SCSI_PASS_THROUGH. Same return contract."""
+    def scsi_execute(path, cdb, alloc, timeout_s, direction="in", out_data=b""):
+        """Run one SCSI command via IOCTL_SCSI_PASS_THROUGH. Same return contract.
+
+        direction: "in" / "out" / "none"; out_data: payload for "out" commands.
+        """
         spt = ScsiPassThrough()
         data_buf = ctypes.create_string_buffer(max(alloc, 1)) if alloc > 0 else ctypes.create_string_buffer(1)
+        if alloc > 0 and direction == "out":
+            fill = bytes(out_data[:alloc]) if out_data else b"\x00" * alloc
+            data_buf[:len(fill)] = fill
         total = ctypes.sizeof(ScsiPassThrough) + max(alloc, 1)
         io_buf = ctypes.create_string_buffer(total)
         ctypes.memmove(ctypes.byref(io_buf, 0), ctypes.byref(spt), ctypes.sizeof(ScsiPassThrough))
@@ -344,7 +401,7 @@ if os.name == "nt":
         spt_ptr.Lun = 0
         spt_ptr.CdbLength = len(cdb)
         spt_ptr.SenseInfoLength = 32
-        spt_ptr.DataIn = SCSI_IOCTL_DATA_IN if alloc > 0 else SCSI_IOCTL_DATA_UNSPECIFIED
+        spt_ptr.DataIn = (SCSI_IOCTL_DATA_OUT if direction == "out" else SCSI_IOCTL_DATA_IN) if alloc > 0 else SCSI_IOCTL_DATA_UNSPECIFIED
         spt_ptr.DataTransferLength = alloc
         spt_ptr.TimeOutValue = max(1, int(timeout_s))
         spt_ptr.DataBufferOffset = ctypes.sizeof(ScsiPassThrough)
@@ -561,6 +618,7 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
     t0 = time.time()
     result = {
         "device": dev,
+        "mode": "full-compat" if dangerous else "safe",
         "vendor": None, "product": None, "revision": None,
         "peripheral_type": None, "peripheral_type_name": None,
         "serial_number": None,
@@ -667,14 +725,11 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
             progress_cb(idx + 1, TOTAL_PROBE_STEPS)
         op = cmd["op"]
         entry = {"opcode": f"0x{op:02X}", "name": cmd["name"], "category": cmd["cat"]}
+        if cmd.get("legacy"):
+            entry["legacy"] = True
 
-        if cmd.get("unsafe"):
-            entry.update(result="SKIPPED", detail=f"🔒 unsafe to test ({cmd['unsafe']})")
-            summary["SKIPPED"] += 1
-            result["commands"].append(entry)
-            continue
         if cmd.get("dangerous") and not dangerous:
-            entry.update(result="SKIPPED", detail="--dangerous not enabled")
+            entry.update(result="SKIPPED", detail="--dangerous full-compat mode not enabled")
             summary["SKIPPED"] += 1
             result["commands"].append(entry)
             continue
@@ -682,15 +737,31 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
         if op in cache:
             label, detail = cache[op]
         else:
-            # READ 10 transfers exactly 1 block — allocate the media's actual
-            # sector size (READ CAPACITY) or the CD raw maximum when unknown.
-            if op == 0x28:
+            alloc = cmd["alloc"]
+            out_data = b""
+            if op in (0x28, 0xA8):
+                # READ 10 / READ 12: exactly 1 block — allocate the media's real
+                # sector size (READ CAPACITY) or the CD raw maximum when unknown.
                 alloc = media_block_size or MAX_SECTOR_SIZE
-            else:
-                alloc = cmd["alloc"]
-            status, sense, data, err = scsi_execute(dev, cmd["cdb"], alloc, timeout_s)
+            elif op in (0x2A, 0xAA, 0x2E):
+                # WRITE 10 / WRITE 12 / WRITE AND VERIFY: full-compat real write.
+                alloc = media_block_size or MAX_SECTOR_SIZE
+                out_data = b"\xAA" * alloc
+            elif op == 0x04:
+                # FORMAT UNIT: 12-byte parameter list (FmtData=1, descriptor: 0
+                # blocks = whole disc, Full Format, Type Dependent 0800h).
+                out_data = bytes([0x10, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x08, 0x00, 0x00])
+            elif op == 0x3B and dangerous:
+                # WRITE BUFFER mode 0x00 (combined header+data): 4-byte header
+                # (buffer id 0, offset 0) + 4 data bytes. Firmware modes are NEVER used.
+                out_data = bytes([0x00, 0x00, 0x00, 0x00, 0xAA, 0xAA, 0xAA, 0xAA])
+            status, sense, data, err = scsi_execute(dev, cmd["cdb"], alloc, timeout_s,
+                                                    direction=cmd.get("dir", "in"),
+                                                    out_data=out_data)
             label, detail = classify(status, sense, err)
             entry["sense_hex"] = sense.hex(" ") if sense else ""
+            if cmd.get("danger_note") and dangerous:
+                detail = f"{detail} [{cmd['danger_note']}]"
         entry["result"] = label
         entry["detail"] = detail
         summary[label] = summary.get(label, 0) + 1
@@ -711,7 +782,9 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
 # Output
 # ---------------------------------------------------------------------------
 def format_human(r):
+    mode_tag = "FULL COMPATIBILITY TEST MODE (--dangerous)" if r.get("mode") == "full-compat" else "safe mode"
     lines = [f"=== Device: {r['device']} ==="]
+    lines.append(f"Mode                   : {mode_tag}")
     lines.append(f"Vendor / Product / Rev : {r['vendor'] or '?'} / {r['product'] or '?'} / {r['revision'] or '?'}")
     pt = r["peripheral_type"]
     lines.append(f"Peripheral Type        : {'0x%02x (%s)' % (pt, r['peripheral_type_name'])}" if pt is not None else "Peripheral Type        : ?")
@@ -786,13 +859,18 @@ def main(argv=None):
     p = argparse.ArgumentParser(
         prog="odd_probe.py",
         description="USB ODD (optical disc drive) SCSI command support probe — CD/DVD/BD/HD-DVD/DDCD",
-        epilog="Safety: BLANK / CLOSE TRACK/SESSION are NEVER sent, even with --dangerous.",
+        epilog="Modes: default = safe (destructive commands skipped with a hint); "
+               "--dangerous = FULL COMPATIBILITY TESTING (every command sent with real "
+               "parameters, incl. BLANK/FORMAT/CLOSE TRACK/WRITE/tray eject). "
+               "Only exception: WRITE BUFFER firmware modes are never used.",
     )
     p.add_argument("mode", nargs="?", choices=["list"], help="list detected SCSI/optical devices")
     p.add_argument("--device", metavar="PATH", help="device node to probe (e.g. /dev/sr0, /dev/sg2, \\\\.\\CdRom0)")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.add_argument("--dangerous", action="store_true",
-                   help="probe write-class opcodes with inert parameter CDBs (BLANK/CLOSE never sent)")
+                   help="FULL COMPATIBILITY mode: send every command with real parameters "
+                        "(BLANK erases disc, FORMAT UNIT formats, WRITE writes, LOAD/UNLOAD "
+                        "operates the tray). Intended for ODD product compatibility testing.")
     p.add_argument("--timeout", type=_positive_int, default=5, metavar="SEC", help="per-command timeout in seconds (default 5)")
     args = p.parse_args(argv)
 

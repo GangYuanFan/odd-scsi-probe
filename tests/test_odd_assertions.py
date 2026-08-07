@@ -105,23 +105,42 @@ print("== READ 10 CDB regression (B2) ==")
 read10 = next(c for c in op.CMDS if c["op"] == 0x28)
 check("transfer len bytes 7-8 == 0x0001 (1 block)",
       read10["cdb"][7:9] == bytes([0x00, 0x01]), read10["cdb"].hex())
-check("alloc == 512 (matches 1 block)", read10["alloc"] == 512)
+check("alloc == 0 static (runtime override to media block size)", read10["alloc"] == 0)
 check("LBA bytes 2-5 == 0", read10["cdb"][2:6] == bytes(4))
 
-print("== command matrix counts / safety flags ==")
-check("total 45 opcodes (READ CD moved to block-type matrix)", len(op.CMDS) == 45, str(len(op.CMDS)))
-check("15 SPC / 17 MMC / 13 DANGEROUS",
-      [sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")] == [15, 17, 13])
-for opc in (0xA1, 0x5B, 0x56):
+print("== command matrix counts / safety flags (v1.1.0 MMC-6 alignment) ==")
+check("total 58 opcodes (READ CD moved to block-type matrix)", len(op.CMDS) == 58, str(len(op.CMDS)))
+check("15 SPC / 24 MMC / 19 DANGEROUS",
+      [sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")] == [15, 24, 19],
+      str([sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")]))
+check("full MMC-6 Table 226/227 coverage (48 opcodes, 0xBE via block-type matrix)",
+      not (op.MMC6_OPCODES - {c["op"] for c in op.CMDS} - {0xBE}))
+check("every command has a legal dir (in/out/none)",
+      all(c.get("dir") in ("in", "out", "none") for c in op.CMDS))
+check("all 'out' commands carry alloc > 0 or runtime override",
+      all(c["alloc"] > 0 or c["op"] in (0x15, 0x2A, 0x2E, 0x55, 0xAA) for c in op.CMDS if c.get("dir") == "out"),
+      str([hex(c["op"]) for c in op.CMDS if c.get("dir") == "out" and c["alloc"] == 0]))
+check("0xA0 is REPORT LUNS (was wrongly REPORT KEY)",
+      next(c for c in op.CMDS if c["op"] == 0xA0)["name"] == "REPORT LUNS")
+check("0xA2 is SECURITY PROTOCOL IN (was wrongly SEND KEY)",
+      next(c for c in op.CMDS if c["op"] == 0xA2)["name"] == "SECURITY PROTOCOL IN")
+check("0xA3 is SEND KEY (12-byte CDB)",
+      next(c for c in op.CMDS if c["op"] == 0xA3)["name"] == "SEND KEY"
+      and len(next(c for c in op.CMDS if c["op"] == 0xA3)["cdb"]) == 12)
+check("12-byte CDBs (A8/AA/AB/BD) have len==12",
+      all(len(next(c for c in op.CMDS if c["op"] == opc)["cdb"]) == 12 for opc in (0xA8, 0xAA, 0xAB, 0xBD)))
+check("16-byte CDBs (A2/A3/B5/A4) have len==16",
+      all(len(next(c for c in op.CMDS if c["op"] == opc)["cdb"]) == 16 for opc in (0xA2, 0xA4, 0xB5)))
+for opc in (0xA1, 0x5B, 0x56, 0x04, 0xA6, 0x47, 0x48):
     c = next(c for c in op.CMDS if c["op"] == opc)
-    check(f"0x{opc:02X} has unsafe flag", bool(c.get("unsafe")), str(c))
-for opc in (0x47, 0x48):
-    c = next(c for c in op.CMDS if c["op"] == opc)
-    check(f"0x{opc:02X} play-audio has unsafe flag", bool(c.get("unsafe")), str(c))
+    check(f"0x{opc:02X} flagged dangerous (sent for real in --dangerous)", bool(c.get("dangerous")), str(c))
 danger = [c for c in op.CMDS if c.get("dangerous")]
-unsafe = [c for c in op.CMDS if c.get("unsafe")]
-check("10 dangerous-inert entries (3 unsafe never-sent excluded)", len(danger) == 10, str(len(danger)))
-check("5 unsafe-never-sent entries (BLANK/CLOSE x3 + PLAY AUDIO x2)", len(unsafe) == 5, str(len(unsafe)))
+check("22 dangerous entries (incl. PLAY AUDIO x3 — full compat per product owner)",
+      len(danger) == 22, str(len(danger)))
+check("no 'unsafe' flag remains (owner removed never-send policy)",
+      all(not c.get("unsafe") for c in op.CMDS))
+wb = next(c for c in op.CMDS if c["op"] == 0x3B)
+check("WRITE BUFFER uses mode 0x00 (never firmware mode)", wb["cdb"][1] == 0x00)
 
 print("== --timeout validation (B4) ==")
 check("_positive_int('5') == 5", op._positive_int("5") == 5)
@@ -134,7 +153,7 @@ for bad in ("0", "-3", "abc"):
 
 print("== list mode OSError guard (B3) ==")
 orig_exec = op.scsi_execute
-def boom(path, cdb, alloc, timeout_s):
+def boom(path, cdb, alloc, timeout_s, direction="in", out_data=b""):
     raise PermissionError(13, "Permission denied")
 op.scsi_execute = boom
 buf = io.StringIO()
@@ -186,7 +205,7 @@ check("CreateFileW argtypes complete", fake.CreateFileW.argtypes ==
 check("DeviceIoControl argtypes complete (8 args)", len(fake.DeviceIoControl.argtypes) == 8)
 
 print("== probe_device: 0x12 cache respects INQUIRY failure (Windows finding) ==")
-op.scsi_execute = lambda path, cdb, alloc, timeout_s: (0, b"", b"", "CreateFileW failed (2)")
+op.scsi_execute = lambda path, cdb, alloc, timeout_s, direction="in", out_data=b"": (0, b"", b"", "CreateFileW failed (2)")
 try:
     r = op.probe_device("/dev/fake", 1, False)
     e12 = next(c for c in r["commands"] if c["opcode"] == "0x12")
@@ -199,14 +218,14 @@ print("== doc/feature counts (B6) ==")
 check("FEATURE_NAMES == 49 (README claim)", len(op.FEATURE_NAMES) == 49, str(len(op.FEATURE_NAMES)))
 
 print("== probe_device progress callback (GUI support) ==")
-op.scsi_execute = lambda path, cdb, alloc, timeout_s: (0x00, b"", b"\x00" * max(alloc, 1), "")
+op.scsi_execute = lambda path, cdb, alloc, timeout_s, direction="in", out_data=b"": (0x00, b"", b"\x00" * max(alloc, 1), "")
 try:
     calls = []
     res = op.probe_device("/dev/fake", 1, False, progress_cb=lambda d, t: calls.append((d, t)))
-    check("55 monotonic calls (45 opcodes + 10 block types)", len(calls) == 55 and calls[0] == (1, 55)
-          and calls[-1] == (55, 55) and [c[0] for c in calls] == list(range(1, 56)), str(len(calls)))
-    check("summary counts add up to 55 (block types merged)",
-          sum(res["summary"].values()) == 55, str(res["summary"]))
+    check("68 monotonic calls (58 opcodes + 10 block types)", len(calls) == 68 and calls[0] == (1, 68)
+          and calls[-1] == (68, 68) and [c[0] for c in calls] == list(range(1, 69)), str(len(calls)))
+    check("summary counts add up to 68 (block types merged)",
+          sum(res["summary"].values()) == 68, str(res["summary"]))
 finally:
     op.scsi_execute = orig_exec
 
@@ -237,14 +256,14 @@ print("== sector size / READ 10 dynamic allocation (PM requirement) ==")
 check("name_block_size(None) == unknown", op.name_block_size(None) == "unknown")
 check("name_block_size(2352) == '2352 (CD raw)'", op.name_block_size(2352) == "2352 (CD raw)")
 check("name_block_size(2048) == '2048'", op.name_block_size(2048) == "2048")
-check("READ 10 static alloc >= 512 (min sector)", read10["alloc"] >= 512)
-check("TOTAL_PROBE_STEPS == 55 (45 + 10)", op.TOTAL_PROBE_STEPS == 55, str(op.TOTAL_PROBE_STEPS))
+check("READ 10 static alloc is 0 (runtime override)", read10["alloc"] == 0)
+check("TOTAL_PROBE_STEPS == 68 (58 + 10)", op.TOTAL_PROBE_STEPS == 68, str(op.TOTAL_PROBE_STEPS))
 check("0xBE not in CMDS (block-type matrix owns READ CD)",
       all(c["op"] != 0xBE for c in op.CMDS))
 # CDB/alloc consistency: sector-transfer READ commands must allocate at
 # least one full sector; fixed-structure responses (sense, capacities,
 # keys) legitimately use small buffers and are not sector-based.
-for opc, min_alloc in ((0x28, 512), (0xAD, 2048)):
+for opc, min_alloc in ((0xAD, 2048),):
     cmd = next(c for c in op.CMDS if c["op"] == opc)
     check(f"0x{opc:02X} alloc >= {min_alloc} (sector-sized)", cmd["alloc"] >= min_alloc, str(cmd["alloc"]))
 check("READ 10 CDB transfer len = 1 block (bytes 7-8)", read10["cdb"][7:9] == bytes([0x00, 0x01]))
@@ -253,8 +272,8 @@ orig_exec = op.scsi_execute
 
 def make_exec(rc_block_size=None):
     calls = []
-    def exec_(path, cdb, alloc, timeout_s):
-        calls.append((bytes(cdb), alloc))
+    def exec_(path, cdb, alloc, timeout_s, direction="in", out_data=b""):
+        calls.append((bytes(cdb), alloc, direction))
         if cdb[0] == 0x25:
             if rc_block_size is None:
                 return (0x02, bytes([0x70, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x20, 0x00]), b"", "")
@@ -300,6 +319,47 @@ try:
               for bt in r["block_type_matrix"]))
     check("no 0xBE row in opcode matrix (replaced by block-type loop)",
           all(c["opcode"] != "0xBE" for c in r["commands"]))
+finally:
+    op.scsi_execute = orig_exec
+
+print("== full-compat mode (--dangerous, product-owner requirement) ==")
+blank = next(c for c in op.CMDS if c["op"] == 0xA1)
+check("BLANK CDB real params (byte1 Immed=1 + blank type 000b == 0x10)", blank["cdb"][1] == 0x10,
+      blank["cdb"].hex())
+funit = next(c for c in op.CMDS if c["op"] == 0x04)
+check("FORMAT UNIT CDB FMTDATA=1 (byte1 == 0x11)", funit["cdb"][1] == 0x11, funit["cdb"].hex())
+check("FORMAT UNIT out-data 12 bytes + dir out", funit["dir"] == "out" and funit["alloc"] == 12)
+loadu = next(c for c in op.CMDS if c["op"] == 0xA6)
+check("LOAD/UNLOAD CDB real params (Immed=1, LoUnlo=1 -> bytes 1,4 == 0x01,0x02)",
+      loadu["cdb"][1] == 0x01 and loadu["cdb"][4] == 0x02, loadu["cdb"].hex())
+close = next(c for c in op.CMDS if c["op"] == 0x5B)
+check("CLOSE TRACK/SESSION CDB (Immed=1, close session 010b)",
+      close["cdb"][1] == 0x01 and close["cdb"][2] == 0x02, close["cdb"].hex())
+
+# safe mode: destructive commands SKIPPED; full-compat: sent for real
+orig_exec = op.scsi_execute
+def fc_exec(path, cdb, alloc, timeout_s, direction="in", out_data=b""):
+    if cdb[0] == 0x25:
+        return (0x00, b"", (0).to_bytes(4, "big") + (2048).to_bytes(4, "big"), "")
+    return (0x00, b"", b"\x00" * max(alloc, 1), "")
+try:
+    op.scsi_execute = fc_exec
+    rs = op.probe_device("/dev/fake", 1, False)
+    check("safe mode: BLANK SKIPPED with hint",
+          next(c for c in rs["commands"] if c["opcode"] == "0xA1")["result"] == "SKIPPED")
+    check("safe mode: mode == 'safe'", rs["mode"] == "safe")
+    rf = op.probe_device("/dev/fake", 1, True)
+    check("full-compat: BLANK sent (result != SKIPPED)",
+          next(c for c in rf["commands"] if c["opcode"] == "0xA1")["result"] != "SKIPPED")
+    check("full-compat: FORMAT UNIT sent",
+          next(c for c in rf["commands"] if c["opcode"] == "0x04")["result"] != "SKIPPED")
+    check("full-compat: LOAD/UNLOAD sent",
+          next(c for c in rf["commands"] if c["opcode"] == "0xA6")["result"] != "SKIPPED")
+    check("full-compat: mode == 'full-compat'", rf["mode"] == "full-compat")
+    check("full-compat: BLANK detail carries danger_note",
+          "erases entire disc" in next(c for c in rf["commands"] if c["opcode"] == "0xA1")["detail"])
+    check("safe mode summary: SKIPPED >= 19 (dangerous set)",
+          rs["summary"]["SKIPPED"] >= 19, str(rs["summary"]["SKIPPED"]))
 finally:
     op.scsi_execute = orig_exec
 
