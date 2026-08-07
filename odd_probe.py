@@ -610,6 +610,17 @@ def format_list(dev, info, ok, err):
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+def _positive_int(text):
+    """argparse type: reject 0 / negatives instead of silently clamping to 1ms."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid int value: {text!r}") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive integer (got {value})")
+    return value
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(
         prog="odd_probe.py",
@@ -621,7 +632,7 @@ def main(argv=None):
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.add_argument("--dangerous", action="store_true",
                    help="probe write-class opcodes with inert parameter CDBs (BLANK/CLOSE never sent)")
-    p.add_argument("--timeout", type=int, default=5, metavar="SEC", help="per-command timeout in seconds (default 5)")
+    p.add_argument("--timeout", type=_positive_int, default=5, metavar="SEC", help="per-command timeout in seconds (default 5)")
     args = p.parse_args(argv)
 
     if args.mode == "list":
@@ -630,7 +641,11 @@ def main(argv=None):
         devs = discover_devices()
         print(f"Found {len(devs)} candidate device(s):")
         for dev in devs:
-            info, ok, err = inquiry(dev, args.timeout)
+            try:
+                info, ok, err = inquiry(dev, args.timeout)
+            except OSError as e:
+                print(format_list(dev, None, False, str(e)))
+                continue
             print(format_list(dev, info, ok, err))
         return 0
 
