@@ -322,11 +322,14 @@ if os.name == "nt":
     FILE_SHARE_WRITE = 0x00000002
     OPEN_EXISTING = 3
 
-    _configure_windows_ctypes(ctypes.windll.kernel32)
+    # Capture Win32 error codes via a dedicated kernel32 handle created with
+    # use_last_error=True: setting the flag on ctypes.windll.kernel32 AFTER
+    # function creation is a no-op, so get_last_error() would return stale 0.
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _configure_windows_ctypes(kernel32)
 
     def scsi_execute(path, cdb, alloc, timeout_s):
         """Run one SCSI command via IOCTL_SCSI_PASS_THROUGH. Same return contract."""
-        kernel32 = ctypes.windll.kernel32
         spt = ScsiPassThrough()
         data_buf = ctypes.create_string_buffer(max(alloc, 1)) if alloc > 0 else ctypes.create_string_buffer(1)
         total = ctypes.sizeof(ScsiPassThrough) + max(alloc, 1)
@@ -634,7 +637,13 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
     for cmd in CMDS:
         op = cmd["op"]
         if op == 0x12:
-            cache[op] = ("SUPPORTED", "GOOD (cached from INQUIRY)")
+            if ok and info:
+                cache[op] = ("SUPPORTED", "GOOD (cached from INQUIRY)")
+            else:
+                # Device could not be opened / INQUIRY failed — do NOT claim
+                # support (found via Windows real-machine test: CreateFileW
+                # failure previously still reported 0x12 as SUPPORTED).
+                cache[op] = classify(0, b"", err or "INQUIRY failed")
         elif op == 0x46:
             if not gc_err and gc_status == 0x00:
                 cache[op] = ("SUPPORTED", "GOOD (cached from GET CONFIGURATION)")
@@ -765,6 +774,15 @@ def _positive_int(text):
 
 
 def main(argv=None):
+    # Windows consoles use legacy codepages (cp950 on zh-TW); the human report
+    # contains symbols (✅ ⚠ …) that cannot be encoded there. Replace instead
+    # of crashing; UTF-8 terminals keep the full glyphs.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass  # not a text stream (test capture) or already configured
+
     p = argparse.ArgumentParser(
         prog="odd_probe.py",
         description="USB ODD (optical disc drive) SCSI command support probe — CD/DVD/BD/HD-DVD/DDCD",

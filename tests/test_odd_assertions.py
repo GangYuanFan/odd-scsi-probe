@@ -185,6 +185,16 @@ check("CreateFileW argtypes complete", fake.CreateFileW.argtypes ==
       [wt.LPCWSTR, wt.DWORD, wt.DWORD, wt.LPVOID, wt.DWORD, wt.DWORD, wt.HANDLE])
 check("DeviceIoControl argtypes complete (8 args)", len(fake.DeviceIoControl.argtypes) == 8)
 
+print("== probe_device: 0x12 cache respects INQUIRY failure (Windows finding) ==")
+op.scsi_execute = lambda path, cdb, alloc, timeout_s: (0, b"", b"", "CreateFileW failed (2)")
+try:
+    r = op.probe_device("/dev/fake", 1, False)
+    e12 = next(c for c in r["commands"] if c["opcode"] == "0x12")
+    check("0x12 NOT reported SUPPORTED when INQUIRY fails",
+          e12["result"] == "OTHER" and "CreateFileW" in e12["detail"], str(e12))
+finally:
+    pass
+
 print("== doc/feature counts (B6) ==")
 check("FEATURE_NAMES == 49 (README claim)", len(op.FEATURE_NAMES) == 49, str(len(op.FEATURE_NAMES)))
 
