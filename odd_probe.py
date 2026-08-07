@@ -246,7 +246,49 @@ if os.name == "posix":
         data = bytes(data_buf.raw[:alloc]) if data_buf else b""
         return (hdr.status, bytes(sense_buf.raw[: hdr.sb_len_wr or 32]), data, "")
 
-elif os.name == "nt":
+# ---------------------------------------------------------------------------
+# Windows backend (IOCTL_SCSI_PASS_THROUGH)
+# ---------------------------------------------------------------------------
+# SCSI_PASS_THROUGH is defined on every platform so its ctypes layout can be
+# verified against <ntddscsi.h> (pshpack4) without a Windows host (tests/).
+class ScsiPassThrough(ctypes.Structure):
+    """struct _SCSI_PASS_THROUGH (16-byte CDB + 32-byte sense inline)."""
+    _fields_ = [
+        ("Length", ctypes.c_ushort),
+        ("ScsiStatus", ctypes.c_ubyte),
+        ("PathId", ctypes.c_ubyte),
+        ("TargetId", ctypes.c_ubyte),
+        ("Lun", ctypes.c_ubyte),
+        ("CdbLength", ctypes.c_ubyte),
+        ("SenseInfoLength", ctypes.c_ubyte),
+        ("DataIn", ctypes.c_ubyte),
+        ("DataTransferLength", ctypes.c_uint),
+        ("TimeOutValue", ctypes.c_uint),
+        ("DataBufferOffset", ctypes.c_uint),
+        ("SenseInfoOffset", ctypes.c_uint),
+        ("Cdb", ctypes.c_ubyte * 16),
+        ("SenseBuf", ctypes.c_ubyte * 32),
+    ]
+
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+
+def _configure_windows_ctypes(kernel32):
+    """Declare ctypes signatures: HANDLE/BOOL are 64-bit — default c_int would
+    truncate the handle and break the INVALID_HANDLE_VALUE check on x64."""
+    import ctypes.wintypes as wt
+    kernel32.CreateFileW.restype = wt.HANDLE
+    kernel32.CreateFileW.argtypes = [
+        wt.LPCWSTR, wt.DWORD, wt.DWORD, wt.LPVOID, wt.DWORD, wt.DWORD, wt.HANDLE,
+    ]
+    kernel32.DeviceIoControl.restype = wt.BOOL
+    kernel32.DeviceIoControl.argtypes = [
+        wt.HANDLE, wt.DWORD, wt.LPVOID, wt.DWORD, wt.LPVOID, wt.DWORD,
+        ctypes.POINTER(wt.DWORD), wt.LPVOID,  # lpOverlapped (always None)
+    ]
+
+
+if os.name == "nt":
     import ctypes.wintypes as wt
 
     GENERIC_READ = 0x80000000
@@ -254,29 +296,12 @@ elif os.name == "nt":
     FILE_SHARE_READ = 0x00000001
     FILE_SHARE_WRITE = 0x00000002
     OPEN_EXISTING = 3
-    INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
-    class ScsiPassThrough(ctypes.Structure):
-        """struct _SCSI_PASS_THROUGH (16-byte CDB + 32-byte sense inline)."""
-        _fields_ = [
-            ("Length", ctypes.c_ushort),
-            ("ScsiStatus", ctypes.c_ubyte),
-            ("PathId", ctypes.c_ubyte),
-            ("TargetId", ctypes.c_ubyte),
-            ("Lun", ctypes.c_ubyte),
-            ("CdbLength", ctypes.c_ubyte),
-            ("SenseInfoLength", ctypes.c_ubyte),
-            ("DataIn", ctypes.c_ubyte),
-            ("DataTransferLength", ctypes.c_uint),
-            ("TimeOutValue", ctypes.c_uint),
-            ("DataBufferOffset", ctypes.c_uint),
-            ("SenseInfoOffset", ctypes.c_uint),
-            ("Cdb", ctypes.c_ubyte * 16),
-            ("SenseBuf", ctypes.c_ubyte * 32),
-        ]
+    _configure_windows_ctypes(ctypes.windll.kernel32)
 
     def scsi_execute(path, cdb, alloc, timeout_s):
         """Run one SCSI command via IOCTL_SCSI_PASS_THROUGH. Same return contract."""
+        kernel32 = ctypes.windll.kernel32
         spt = ScsiPassThrough()
         data_buf = ctypes.create_string_buffer(max(alloc, 1)) if alloc > 0 else ctypes.create_string_buffer(1)
         total = ctypes.sizeof(ScsiPassThrough) + max(alloc, 1)
@@ -299,22 +324,20 @@ elif os.name == "nt":
         for i, b in enumerate(cdb):
             spt_ptr.Cdb[i] = b
 
-        handle = wt.HANDLE(INVALID_HANDLE_VALUE)
+        handle = kernel32.CreateFileW(
+            path, GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING, 0, None)
+        if handle == INVALID_HANDLE_VALUE:
+            return (0, b"", b"", f"CreateFileW failed ({ctypes.get_last_error()})")
         try:
-            handle = ctypes.windll.kernel32.CreateFileW(
-                path, GENERIC_READ | GENERIC_WRITE,
-                FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING, 0, None)
-            if handle == INVALID_HANDLE_VALUE:
-                return (0, b"", b"", f"CreateFileW failed ({ctypes.get_last_error()})")
             returned = wt.DWORD(0)
-            ok = ctypes.windll.kernel32.DeviceIoControl(
+            ok = kernel32.DeviceIoControl(
                 handle, IOCTL_SCSI_PASS_THROUGH, io_buf, total, io_buf, total,
                 ctypes.byref(returned), None)
             if not ok:
                 return (0, b"", b"", f"DeviceIoControl failed ({ctypes.get_last_error()})")
         finally:
-            if handle != INVALID_HANDLE_VALUE:
-                ctypes.windll.kernel32.CloseHandle(handle)
+            kernel32.CloseHandle(handle)
 
         spt_out = ctypes.cast(io_buf, ctypes.POINTER(ScsiPassThrough)).contents
         data = bytes(io_buf.raw[ctypes.sizeof(ScsiPassThrough): ctypes.sizeof(ScsiPassThrough) + alloc])
