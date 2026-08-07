@@ -142,6 +142,8 @@ class OddProbeApp(tk.Tk):
 
         self.export_btn = ttk.Button(bar, text="匯出報告", command=self._on_export)
         self.export_btn.grid(row=0, column=6)
+        self.html_btn = ttk.Button(bar, text="匯出 HTML 報告", command=self._on_export_html)
+        self.html_btn.grid(row=0, column=7)
 
     def _build_body(self):
         self.nb = ttk.Notebook(self)
@@ -347,6 +349,22 @@ class OddProbeApp(tk.Tk):
         self._fill_matrix(model["rows"])
         self._fill_stats(model)
         self.status_var.set(f"檢測完成（{model['duration'] or 0:.1f}s）：{stats_line(model['stats'])}")
+
+    def _on_export_html(self):
+        if self.result is None:
+            messagebox.showinfo("匯出 HTML 報告", "尚無檢測結果可匯出。", parent=self)
+            return
+        path = filedialog.asksaveasfilename(
+            parent=self, title="匯出 HTML 報告", defaultextension=".html",
+            filetypes=[("HTML 報告", "*.html")])
+        if not path:
+            return
+        try:
+            import report_html
+            saved = report_html.write_html_report(self.result, path)
+            messagebox.showinfo("匯出 HTML 報告", f"已存檔：\n{saved}", parent=self)
+        except Exception as e:
+            messagebox.showerror("匯出 HTML 報告", f"匯出失敗：{e}", parent=self)
 
     def _on_export(self):
         if self.result is None:

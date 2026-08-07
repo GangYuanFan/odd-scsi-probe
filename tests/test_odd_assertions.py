@@ -108,11 +108,18 @@ check("transfer len bytes 7-8 == 0x0001 (1 block)",
 check("alloc == 0 static (runtime override to media block size)", read10["alloc"] == 0)
 check("LBA bytes 2-5 == 0", read10["cdb"][2:6] == bytes(4))
 
-print("== command matrix counts / safety flags (v1.1.0 MMC-6 alignment) ==")
-check("total 58 opcodes (READ CD moved to block-type matrix)", len(op.CMDS) == 58, str(len(op.CMDS)))
-check("15 SPC / 24 MMC / 19 DANGEROUS",
-      [sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")] == [15, 24, 19],
+print("== command matrix counts / safety flags (v1.2.0 MMC-6 + RSOC) ==")
+check("total 59 opcodes (READ CD moved to block-type matrix)", len(op.CMDS) == 59, str(len(op.CMDS)))
+check("16 SPC / 24 MMC / 19 DANGEROUS",
+      [sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")] == [16, 24, 19],
       str([sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")]))
+check("RSOC entry present (MAINTENANCE IN SA=0x0C)", any(c.get("rsoc") for c in op.CMDS), "missing")
+rsoc = next((c for c in op.CMDS if c.get("rsoc")), None)
+check("RSOC CDB is 12-byte MAINTENANCE IN 0xA3/0x0C",
+      rsoc is not None and rsoc["cdb"] == bytes([0xA3, 0x0C, 0, 0, 0, 0, 0, 0, 0x10, 0x00, 0, 0]),
+      str(rsoc))
+check("0x35 name covers MMC-2 FLUSH CACHE (ATAPI variant)",
+      any("FLUSH CACHE" in c["name"] for c in op.CMDS if c["op"] == 0x35), "0x35 rename missing")
 check("full MMC-6 Table 226/227 coverage (48 opcodes, 0xBE via block-type matrix)",
       not (op.MMC6_OPCODES - {c["op"] for c in op.CMDS} - {0xBE}))
 check("every command has a legal dir (in/out/none)",
@@ -124,9 +131,11 @@ check("0xA0 is REPORT LUNS (was wrongly REPORT KEY)",
       next(c for c in op.CMDS if c["op"] == 0xA0)["name"] == "REPORT LUNS")
 check("0xA2 is SECURITY PROTOCOL IN (was wrongly SEND KEY)",
       next(c for c in op.CMDS if c["op"] == 0xA2)["name"] == "SECURITY PROTOCOL IN")
-check("0xA3 is SEND KEY (12-byte CDB)",
-      next(c for c in op.CMDS if c["op"] == 0xA3)["name"] == "SEND KEY"
-      and len(next(c for c in op.CMDS if c["op"] == 0xA3)["cdb"]) == 12)
+check("0xA3 is MAINTENANCE IN (RSOC, SPC-3 SA=0x0C, 12-byte CDB)",
+      next(c for c in op.CMDS if c["op"] == 0xA3)["name"] == "MAINTENANCE IN (RSOC)"
+      and next(c for c in op.CMDS if c["op"] == 0xA3)["rsoc"] is True
+      and len(next(c for c in op.CMDS if c["op"] == 0xA3)["cdb"]) == 12,
+      str(next(c for c in op.CMDS if c["op"] == 0xA3)))
 check("12-byte CDBs (A8/AA/AB/BD) have len==12",
       all(len(next(c for c in op.CMDS if c["op"] == opc)["cdb"]) == 12 for opc in (0xA8, 0xAA, 0xAB, 0xBD)))
 check("16-byte CDBs (A2/A3/B5/A4) have len==16",
@@ -222,12 +231,20 @@ op.scsi_execute = lambda path, cdb, alloc, timeout_s, direction="in", out_data=b
 try:
     calls = []
     res = op.probe_device("/dev/fake", 1, False, progress_cb=lambda d, t: calls.append((d, t)))
-    check("68 monotonic calls (58 opcodes + 10 block types)", len(calls) == 68 and calls[0] == (1, 68)
-          and calls[-1] == (68, 68) and [c[0] for c in calls] == list(range(1, 69)), str(len(calls)))
-    check("summary counts add up to 68 (block types merged)",
-          sum(res["summary"].values()) == 68, str(res["summary"]))
+    check("69 monotonic calls (59 opcodes + 10 block types)", len(calls) == 69 and calls[0] == (1, 69)
+          and calls[-1] == (69, 69) and [c[0] for c in calls] == list(range(1, 70)), str(len(calls)))
+    check("summary counts add up to 69 (block types merged)",
+          sum(res["summary"].values()) == 69, str(res["summary"]))
+    check("RSOC probe populates rsoc_opcodes from SUPPORTED 0xA3",
+          isinstance(res.get("rsoc_opcodes"), list), str(type(res.get("rsoc_opcodes"))))
 finally:
     op.scsi_execute = orig_exec
+
+print("== parse_rsoc (SPC-3 REPORT SUPPORTED OPERATION CODES) ==")
+fake = b"\x00\x10\x00\x00" + bytes([0x12]) + b"\x00" * 7 + bytes([0xA3]) + b"\x00" * 7 + bytes([0x25]) + b"\x00" * 7
+check("parse_rsoc extracts 0x12/0x25/0xA3 descriptors",
+      op.parse_rsoc(fake) == [0x12, 0x25, 0xA3], str(op.parse_rsoc(fake)))
+check("parse_rsoc tolerates short data", op.parse_rsoc(b"\x00\x00") == [], str(op.parse_rsoc(b"\x00\x00")))
 
 print("== READ CD / MMC Table 600 (PM requirement) ==")
 check("10 valid block type codes", tuple(op.CD_BLOCK_TYPES) == (0, 1, 2, 3, 8, 9, 10, 11, 12, 13))
@@ -257,7 +274,7 @@ check("name_block_size(None) == unknown", op.name_block_size(None) == "unknown")
 check("name_block_size(2352) == '2352 (CD raw)'", op.name_block_size(2352) == "2352 (CD raw)")
 check("name_block_size(2048) == '2048'", op.name_block_size(2048) == "2048")
 check("READ 10 static alloc is 0 (runtime override)", read10["alloc"] == 0)
-check("TOTAL_PROBE_STEPS == 68 (58 + 10)", op.TOTAL_PROBE_STEPS == 68, str(op.TOTAL_PROBE_STEPS))
+check("TOTAL_PROBE_STEPS == 69 (59 + 10)", op.TOTAL_PROBE_STEPS == 69, str(op.TOTAL_PROBE_STEPS))
 check("0xBE not in CMDS (block-type matrix owns READ CD)",
       all(c["op"] != 0xBE for c in op.CMDS))
 # CDB/alloc consistency: sector-transfer READ commands must allocate at

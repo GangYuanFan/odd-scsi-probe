@@ -185,11 +185,12 @@ CMDS = [
     {"op": 0x28, "name": "READ 10", "cat": "SPC", "cdb": bytes([0x28, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0]), "alloc": 0, "dir": "in"},  # alloc overridden at runtime: media block size (READ CAPACITY) or 2352 fallback
     {"op": 0x2B, "name": "SEEK 10", "cat": "SPC", "cdb": bytes([0x2B, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none"},
     {"op": 0x2F, "name": "VERIFY 10", "cat": "SPC", "cdb": bytes([0x2F, 0, 0, 0, 0, 0, 0, 0x00, 0, 0]), "alloc": 0, "dir": "none"},  # BYTCHK=0,len=0
-    {"op": 0x35, "name": "SYNCHRONIZE CACHE 10", "cat": "SPC", "cdb": bytes([0x35, 0, 0, 0, 0, 0, 0, 0x00, 0, 0]), "alloc": 0, "dir": "none"},  # range 0 = no-op
+    {"op": 0x35, "name": "SYNCHRONIZE CACHE / FLUSH CACHE", "cat": "SPC", "cdb": bytes([0x35, 0, 0, 0, 0, 0, 0, 0x00, 0, 0]), "alloc": 0, "dir": "none"},  # range 0 = no-op; MMC-2 FLUSH CACHE = ATAPI 12-byte variant of same opcode
     {"op": 0x3C, "name": "READ BUFFER", "cat": "SPC", "cdb": bytes([0x3C, 0x00, 0x00, 0, 0, 0, 0x00, 0x04, 0, 0]), "alloc": 4, "dir": "in"},  # mode 0 capacity header
     {"op": 0x5A, "name": "MODE SENSE 10", "cat": "SPC", "cdb": bytes([0x5A, 0, 0x3F, 0, 0, 0, 0, 0, 0xFF, 0xFF]), "alloc": 65535, "dir": "in"},
     {"op": 0x1C, "name": "RECEIVE DIAGNOSTIC RESULTS", "cat": "SPC", "cdb": bytes([0x1C, 0, 0x00, 0x00, 0x04, 0]), "alloc": 4, "dir": "in"},
     {"op": 0x1D, "name": "SEND DIAGNOSTIC", "cat": "SPC", "cdb": bytes([0x1D, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none"},  # self-test=0
+    {"op": 0xA3, "name": "MAINTENANCE IN (RSOC)", "cat": "SPC", "cdb": bytes([0xA3, 0x0C, 0, 0, 0, 0, 0, 0, 0x10, 0x00, 0, 0]), "alloc": 4096, "dir": "in", "rsoc": True},  # SPC-3 SA=0x0C REPORT SUPPORTED OPERATION CODES — drive reports its own opcode list (shares opcode with MMC-6 SEND KEY; distinguished by service action)
 
     # ---- MMC optical commands (all disc formats, MMC-6 rev 2g) ----
     {"op": 0x23, "name": "READ FORMAT CAPACITIES", "cat": "MMC", "cdb": bytes([0x23, 0, 0, 0, 0, 0, 0x00, 0xFF, 0, 0]), "alloc": 255, "dir": "in"},
@@ -239,7 +240,7 @@ CMDS = [
     {"op": 0xBF, "name": "SEND DISC STRUCTURE", "cat": "DANGEROUS", "cdb": bytes([0xBF, 0x00, 0, 0, 0, 0, 0, 0x00, 0x00, 0x04, 0x00, 0]), "alloc": 4, "dir": "out", "dangerous": True},  # media type 0 (DVD), format code 0, param len 4
 ]
 
-# Total probe steps = 58 opcodes + 10 READ CD Table 600 block types (68).
+# Total probe steps = 59 opcodes + 10 READ CD Table 600 block types (69).
 # progress_cb totals and the GUI progress bar must use this, not len(CMDS).
 TOTAL_PROBE_STEPS = len(CMDS) + len(CD_BLOCK_TYPE_CODES)
 
@@ -609,6 +610,22 @@ def inquiry_serial(dev, timeout_s):
 # ---------------------------------------------------------------------------
 # Full device probe
 # ---------------------------------------------------------------------------
+def parse_rsoc(data):
+    """MAINTENANCE IN / REPORT SUPPORTED OPERATION CODES (SPC-3 SA=0x0C).
+    Returns sorted list of opcodes the drive reports as supported (RT=0:
+    8-byte descriptors, opcode in byte 0)."""
+    if len(data) < 4:
+        return []
+    ops = []
+    off = 4  # 2-byte data length + 2 reserved
+    while off + 4 <= len(data):
+        op = data[off]
+        if op != 0:
+            ops.append(op)
+        off += 8  # RT=0: 8-byte support descriptors
+    return sorted(set(ops))
+
+
 def probe_device(dev, timeout_s, dangerous, progress_cb=None):
     """Probe one device; returns a dict (JSON-serializable).
 
@@ -619,6 +636,7 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
     result = {
         "device": dev,
         "mode": "full-compat" if dangerous else "safe",
+        "rsoc_opcodes": [],
         "vendor": None, "product": None, "revision": None,
         "peripheral_type": None, "peripheral_type_name": None,
         "serial_number": None,
@@ -759,6 +777,8 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
                                                     direction=cmd.get("dir", "in"),
                                                     out_data=out_data)
             label, detail = classify(status, sense, err)
+            if cmd.get("rsoc") and label == "SUPPORTED" and data:
+                result["rsoc_opcodes"] = parse_rsoc(data)
             entry["sense_hex"] = sense.hex(" ") if sense else ""
             if cmd.get("danger_note") and dangerous:
                 detail = f"{detail} [{cmd['danger_note']}]"
@@ -803,6 +823,8 @@ def format_human(r):
         lines.append(f"Features ({len(r['features'])}): " + ", ".join(feat_strs))
     lines.append(f"Media Detected         : {r['media_type']}")
     lines.append(f"Media Block Size       : {r['media_block_size_name']}")
+    if r.get("rsoc_opcodes"):
+        lines.append(f"Drive-Reported Opcodes   : {len(r['rsoc_opcodes'])} supported ({', '.join(f'0x{op:02X}' for op in r['rsoc_opcodes'][:24])}{'...' if len(r['rsoc_opcodes'])>24 else ''})")
     lines.append("")
     lines.append("SCSI Command Matrix:")
     lines.append(f"  {'Opcode':<8}{'Name':<34}{'Category':<11}{'Result':<14}Detail")
@@ -867,6 +889,7 @@ def main(argv=None):
     p.add_argument("mode", nargs="?", choices=["list"], help="list detected SCSI/optical devices")
     p.add_argument("--device", metavar="PATH", help="device node to probe (e.g. /dev/sr0, /dev/sg2, \\\\.\\CdRom0)")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.add_argument("--html", action="store_true", help="standalone fancy HTML report to stdout")
     p.add_argument("--dangerous", action="store_true",
                    help="FULL COMPATIBILITY mode: send every command with real parameters "
                         "(BLANK erases disc, FORMAT UNIT formats, WRITE writes, LOAD/UNLOAD "
@@ -900,7 +923,10 @@ def main(argv=None):
         print(f"error: cannot access {args.device}: {e}", file=sys.stderr)
         return 2
 
-    if args.json:
+    if args.html:
+        import report_html
+        print(report_html.format_html(res))
+    elif args.json:
         json.dump(res, sys.stdout, indent=2, ensure_ascii=False)
         print()
     else:
