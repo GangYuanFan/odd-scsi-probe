@@ -290,7 +290,6 @@ def _configure_windows_ctypes(kernel32):
 
 if os.name == "nt":
     import ctypes.wintypes as wt
-
     GENERIC_READ = 0x80000000
     GENERIC_WRITE = 0x40000000
     FILE_SHARE_READ = 0x00000001
@@ -344,7 +343,7 @@ if os.name == "nt":
         sense = bytes(spt_out.SenseBuf[: spt_out.SenseInfoLength])
         return (spt_out.ScsiStatus, sense, data, "")
 
-else:
+elif os.name != "posix":  # posix backend defined above; only guard exotic platforms
     def scsi_execute(path, cdb, alloc, timeout_s):  # pragma: no cover
         raise RuntimeError(f"unsupported platform: {platform.system()}")
 
@@ -491,8 +490,12 @@ def inquiry_serial(dev, timeout_s):
 # ---------------------------------------------------------------------------
 # Full device probe
 # ---------------------------------------------------------------------------
-def probe_device(dev, timeout_s, dangerous):
-    """Probe one device; returns a dict (JSON-serializable)."""
+def probe_device(dev, timeout_s, dangerous, progress_cb=None):
+    """Probe one device; returns a dict (JSON-serializable).
+
+    progress_cb(done, total) is invoked after each matrix command when given
+    (GUI progress bar); the CLI never passes one, so output is unchanged.
+    """
     t0 = time.time()
     result = {
         "device": dev,
@@ -557,7 +560,10 @@ def probe_device(dev, timeout_s, dangerous):
 
     summary = {"SUPPORTED": 0, "NOT_SUPPORTED": 0, "NEEDS_MEDIA": 0,
                "SKIPPED": 0, "TIMEOUT": 0, "OTHER": 0}
-    for cmd in CMDS:
+    total_cmds = len(CMDS)
+    for idx, cmd in enumerate(CMDS):
+        if progress_cb:
+            progress_cb(idx + 1, total_cmds)
         op = cmd["op"]
         entry = {"opcode": f"0x{op:02X}", "name": cmd["name"], "category": cmd["cat"]}
 
