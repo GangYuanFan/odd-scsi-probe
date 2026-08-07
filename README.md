@@ -91,18 +91,70 @@ pythonw odd_probe_gui.py
 # Windows（需 Python 3.8+）：產生 dist\odd-probe.exe
 build.bat
 
+# 從 WSL2 直接編譯 Windows exe（interop，自動複製到 Windows Temp 再打包）：
+./build-windows.sh
+
 # Linux：產生 dist/odd-probe
 ./build.sh
 ```
+
+三個腳本行為一致：自動偵測 Python（`py -3` → `python` → `python3`）、
+PyInstaller 不存在時自動 `pip install pyinstaller`、帶 `--clean` 避免殘留 cache、
+有 `version_info.txt` 就帶 `--version-file`（exe 屬性含 FileVersion / ProductName）、
+repo 內有 `.ico` 就自動帶 `--icon`。
 
 等價的 PyInstaller 指令：
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --windowed --name odd-probe odd_probe_gui.py
+pyinstaller --onefile --windowed --name odd-probe --clean \
+  --version-file version_info.txt odd_probe_gui.py
 ```
 
 `odd_probe.py` 會被自動打包進執行檔（GUI import 它）。
+
+### Windows 編譯指南
+
+#### 前置需求
+
+- Windows 10/11 + Python 3.8+（[python.org](https://www.python.org/downloads/) 安裝時勾選
+  “Add python.exe to PATH”，建議同時裝 **py launcher**，`build.bat` 會優先使用）
+- 建議以 Administrator 執行（原始 SCSI 指令需管理權限，但編譯本身不需要）
+
+#### 步驟
+
+1. 把 repo 放進 Windows 可讀路徑（如 `C:\Users\you\odd-scsi-probe`）
+2. 雙擊 `build.bat`（或於 cmd 執行），等待輸出 `BUILD OK: ...dist\odd-probe.exe`
+3. 產出單檔 `dist\odd-probe.exe`（約 12 MB），可直接複製到任何 Windows 10/11 x64 使用
+
+#### 從 WSL2 編譯（本專案開發環境）
+
+repo 在 WSL 檔案系統時，直接 `cmd.exe /c build.bat` 會遇到兩個坑，請用
+`./build-windows.sh` 自動處理：
+
+1. **UNC 工作目錄**：CMD 不能以 `\\wsl.localhost\...` 作為起始目錄；腳本改用
+   Windows 側 `%TEMP%\odd-build` 執行打包
+2. **9P 寫入權限**：Windows 程序寫入 `\\wsl.localhost` 掛載可能被拒（WSL 側 root 擁有），
+   改在 Windows 原生路徑寫入，完成後把 exe 複製回 repo 的 `dist/`
+
+#### 常見問題
+
+- **防毒誤報**：PyInstaller 單檔 exe 是自解壓 bootloader，部分防毒會誤判。
+  可加白名單，或改用 `--onedir`（多檔，誤報較少）。
+- **Python 3.14 相容性**：PyInstaller ≥ 6.15 已支援 3.14（本專案實測 6.21.0 + 3.14.3）。
+  若你用的是過舊版 PyInstaller，`build.bat` 偵測不到會自動安裝最新版。
+- **輸出亂碼**：`build.bat` 內部已 `chcp 65001`，且訊息全英文，避免中文語系主控台亂碼。
+- **CLI 在中文 Windows 主控台**：報告符號（✅⚠ 等）在 cp950 主控台無法顯示，
+  程式已自動降級為 `?` 不會崩潰（`stdout.reconfigure(errors="replace")`）。
+
+#### Windows 實測記錄（2026-08-07）
+
+- Python 3.14.3 + PyInstaller 6.21.0：`dist\odd-probe.exe` 12,637,400 B（12.6 MB）編譯成功
+- `python odd_probe.py list`：32 個候選裝置（`\\.\CdRom0-15`、`\\.\Scsi0-15`）全部
+  優雅回報 `unavailable: CreateFileW failed (2)`（ERROR_FILE_NOT_FOUND，無光碟機環境），不 crash
+- `python odd_probe.py --device \\.\CdRom0`：55 項矩陣完整執行，無裝置時
+  0 SUPPORTED / 40 OTHER / 15 SKIPPED（真實反映打不開）
+- exe 啟動驗證：tasklist 可見 `odd-probe.exe`（bootloader + 子進程），啟動不秒退
 
 ## 支援格式
 
@@ -193,7 +245,7 @@ pyinstaller --onefile --windowed --name odd-probe odd_probe_gui.py
 
 ```bash
 python3 -m py_compile odd_probe.py odd_probe_gui.py   # 語法驗證
-python3 tests/test_odd_assertions.py                  # Logic Assertion（104 項，含 B1-B6 + Table 600 回歸）
+python3 tests/test_odd_assertions.py                  # Logic Assertion（105 項，含 B1-B6 + Table 600 回歸）
 python3 tests/test_odd_gui_logic.py                   # GUI 純邏輯測試（22 項，headless）
 xvfb-run -a python3 tests/gui_smoke.py                # GUI 實機 smoke（需顯示；headless 用 xvfb）
 ```
