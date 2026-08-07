@@ -9,7 +9,7 @@ USB ODD（光碟機）SCSI command 支援度檢測工具 — 支援 CD / DVD / B
 - 列出系統中的 SCSI / 光碟裝置（Linux: `/dev/sg*` `/dev/sr*`；Windows: `\\.\CdRom*` `\\.\Scsi*`）
 - 完整裝置檢測：
   - **INQUIRY**：Vendor / Product / Revision / Peripheral Device Type / Serial Number (EVPD 0x80)
-  - **GET CONFIGURATION**：Current Profile、全部支援 Profile（含 current 標記）、Feature List（~60 個內建對照）
+  - **GET CONFIGURATION**：Current Profile、全部支援 Profile（含 current 標記）、Feature List（49 個內建對照）
   - **READ DISC INFORMATION**：目前碟片 Disc Type（與 current profile 交叉比對）
   - **指令矩陣**：~46 個 opcode（SPC 基礎 + MMC 全格式 + 寫入類），逐指令判定支援度
 - 人類可讀輸出 + `--json` 機器可讀輸出（通過 `python3 -m json.tool` 驗證）
@@ -102,10 +102,10 @@ python odd_probe.py --device \\.\CdRom0
 
 ## 已知限制
 
-- Windows backend 以語法正確 + 可 import 驗證（`py_compile`），尚未在真實 Windows 機器實測 — 待硬體 QA
+- Windows backend 已補 `CreateFileW`/`DeviceIoControl` 的 `restype`/`argtypes`（64-bit HANDLE 安全），`SCSI_PASS_THROUGH` layout 經程式化驗證與 ntddscsi.h pshpack4 一致（76B）；尚未在真實 Windows 機器實測 — 待硬體 QA
 - 本機開發環境為 WSL2 虛擬 SCSI（無真實光碟機），GET CONFIGURATION / DISC INFO 解析以單元測試（構造資料）驗證 — 建議以真實 ODD（如 BD-RE 燒錄機）複測
 - sense buffer 使用 32B（非最小 8B）：分類邏輯需要 ASC/ASCQ（offset 12/13）
-- `list` 模式對每個裝置發 INQUIRY，無權限的裝置會顯示 `(unavailable: ...)` 而不中斷
+- `list` 模式對每個裝置發 INQUIRY；無法開啟（如無權限）的裝置會顯示 `(unavailable: 原因)` 並繼續，不會中斷
 
 ## 開發
 
