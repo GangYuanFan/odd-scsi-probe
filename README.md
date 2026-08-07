@@ -57,6 +57,53 @@ python odd_probe.py list
 python odd_probe.py --device \\.\CdRom0
 ```
 
+## GUI 使用（Tkinter）
+
+`odd_probe_gui.py` 提供圖形介面，**重用 `odd_probe.py` 核心引擎**（不重寫邏輯），讓不熟指令的使用者也能在 Windows / Linux 測試 USB ODD。繁體中文介面，零第三方依賴（Tkinter 為 Python 內建）。
+
+### 啟動
+
+```bash
+# Linux / WSLg（直接顯示視窗）
+python3 odd_probe_gui.py
+
+# Windows（無 console 視窗）
+pythonw odd_probe_gui.py
+```
+
+### 操作流程
+
+1. **掃描裝置** → 下拉選單列出候選裝置（Linux: `/dev/sg*` `/dev/sr*`；Windows: `\\.\CdRom*`），選取後「開始檢測」才會啟用
+2. 可選調整：`--dangerous` 勾選（預設關閉；勾選時彈出確認警告，BLANK / CLOSE TRACK 仍永不執行）、Timeout（1-30 秒，預設 5）
+3. **開始檢測** → 背景執行緒執行完整探測，進度列顯示 `x/46`，UI 不凍結
+4. 結果分四頁顯示：
+   - **裝置資訊**：Vendor / Product / Revision / Peripheral Type / Serial / Current Profile / Media Detected
+   - **支援格式**：Profile 清單（current 標 `[*]`）+ Feature 清單
+   - **指令矩陣**：Opcode / 名稱 / 類別 / 結果 / 詳細，結果顏色標記（✅綠 ❌紅 💿藍 🔒灰 ⏱橙 ⚠黑）
+   - **統計**：六類結果計數 + 裝置摘要
+5. **匯出報告** → 存成 JSON 或文字報告（filedialog）
+
+裝置打不開（無權限等）會以訊息框顯示原因；掃描無裝置時也會提示。
+
+### 打包成單一執行檔
+
+```bash
+# Windows（需 Python 3.8+）：產生 dist\odd-probe.exe
+build.bat
+
+# Linux：產生 dist/odd-probe
+./build.sh
+```
+
+等價的 PyInstaller 指令：
+
+```bash
+pip install pyinstaller
+pyinstaller --onefile --windowed --name odd-probe odd_probe_gui.py
+```
+
+`odd_probe.py` 會被自動打包進執行檔（GUI import 它）。
+
 ## 支援格式
 
 | 家族 | Profile / Disc Type |
@@ -110,8 +157,10 @@ python odd_probe.py --device \\.\CdRom0
 ## 開發
 
 ```bash
-python3 -m py_compile odd_probe.py          # 語法驗證
-python3 /tmp/test_odd_assertions.py         # Logic Assertion（42 項）
+python3 -m py_compile odd_probe.py odd_probe_gui.py   # 語法驗證
+python3 tests/test_odd_assertions.py                  # Logic Assertion（67 項，含 B1-B6 回歸）
+python3 tests/test_odd_gui_logic.py                   # GUI 純邏輯測試（22 項，headless）
+xvfb-run -a python3 tests/gui_smoke.py                # GUI 實機 smoke（需顯示；headless 用 xvfb）
 ```
 
 ## License
