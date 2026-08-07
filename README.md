@@ -11,7 +11,7 @@ USB ODD（光碟機）SCSI command 支援度檢測工具 — 支援 CD / DVD / B
   - **INQUIRY**：Vendor / Product / Revision / Peripheral Device Type / Serial Number (EVPD 0x80)
   - **GET CONFIGURATION**：Current Profile、全部支援 Profile（含 current 標記）、Feature List（49 個內建對照）
   - **READ DISC INFORMATION**：目前碟片 Disc Type（與 current profile 交叉比對）
-  - **指令矩陣**：~46 個 opcode（SPC 基礎 + MMC 全格式 + 寫入類），逐指令判定支援度
+  - **指令矩陣**：45 個 opcode（SPC 基礎 + MMC 全格式 + 寫入類）逐指令判定支援度，外加 READ CD Table 600 Data Block Type 支援矩陣（10 種 block type）
 - 人類可讀輸出 + `--json` 機器可讀輸出（通過 `python3 -m json.tool` 驗證）
 
 ## 需求
@@ -75,7 +75,7 @@ pythonw odd_probe_gui.py
 
 1. **掃描裝置** → 下拉選單列出候選裝置（Linux: `/dev/sg*` `/dev/sr*`；Windows: `\\.\CdRom*`），選取後「開始檢測」才會啟用
 2. 可選調整：`--dangerous` 勾選（預設關閉；勾選時彈出確認警告，BLANK / CLOSE TRACK 仍永不執行）、Timeout（1-30 秒，預設 5）
-3. **開始檢測** → 背景執行緒執行完整探測，進度列顯示 `x/46`，UI 不凍結
+3. **開始檢測** → 背景執行緒執行完整探測，進度列顯示 `x/55`（45 個 opcode + 10 種 READ CD block type），UI 不凍結
 4. 結果分四頁顯示：
    - **裝置資訊**：Vendor / Product / Revision / Peripheral Type / Serial / Current Profile / Media Detected
    - **支援格式**：Profile 清單（current 標 `[*]`）+ Feature 清單
@@ -146,15 +146,16 @@ pyinstaller --onefile --windowed --name odd-probe odd_probe_gui.py
 | 14 | — | Reserved | — |
 | 15 | — | NA Vendor Specific | — |
 
-工具對 code 0/1/2/3/8/9/10/11/12/13 各探測一次；type 級分類：0x20（指令不存在）→ 整組 NOT_SUPPORTED，0x24/0x25（該 type 參數被拒）→ 該 type NOT_SUPPORTED，其餘同主矩陣判定邏輯。
+工具對 code 0/1/2/3/8/9/10/11/12/13 各探測一次（READ CD 0xBE 因此不再出現在 opcode 矩陣中，由 block type 迴圈取代）；type 級分類：0x20（指令不存在）→ 整組 NOT_SUPPORTED，0x24/0x25（該 type 參數被拒）→ 該 type NOT_SUPPORTED，其餘同主矩陣判定邏輯。block type 結果**併入 summary 統計**並計入進度列（55 步）；JSON 輸出位於 `block_type_matrix`（每項含 `code` / `size` / `name` / `mandatory` / `result` / `detail` / `sense_hex`）。
 
 ## 指令矩陣分類
 
 | 類別 | 數量 | 說明 |
 | --- | --- | --- |
 | SPC | 15 | SCSI Primary Commands 基礎（INQUIRY、MODE SENSE、READ 10 等） |
-| MMC | 18 | 光碟媒體指令（GET CONFIGURATION、READ CD、READ DISC INFORMATION 等） |
+| MMC | 17 | 光碟媒體指令（GET CONFIGURATION、READ DISC INFORMATION 等；READ CD 以 block type 矩陣另行探測，見上） |
 | DANGEROUS | 13 | 寫入類（僅 `--dangerous` 時以**無效參數 CDB** 測存在性） |
+| READ CD block types | +10 | Table 600 每種 block type 各測一次（併入 summary） |
 
 ### 判定邏輯
 
@@ -192,7 +193,7 @@ pyinstaller --onefile --windowed --name odd-probe odd_probe_gui.py
 
 ```bash
 python3 -m py_compile odd_probe.py odd_probe_gui.py   # 語法驗證
-python3 tests/test_odd_assertions.py                  # Logic Assertion（67 項，含 B1-B6 回歸）
+python3 tests/test_odd_assertions.py                  # Logic Assertion（104 項，含 B1-B6 + Table 600 回歸）
 python3 tests/test_odd_gui_logic.py                   # GUI 純邏輯測試（22 項，headless）
 xvfb-run -a python3 tests/gui_smoke.py                # GUI 實機 smoke（需顯示；headless 用 xvfb）
 ```
