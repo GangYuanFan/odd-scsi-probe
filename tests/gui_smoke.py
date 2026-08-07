@@ -21,6 +21,13 @@ FAKE_RESULT = {
     "features": [{"code": 0x0000, "current": True, "persistent": True},
                  {"code": 0x0040, "current": True, "persistent": False}],
     "media_type": "BD-R (disc type 0x0d)",
+    "media_block_size": 2352, "media_block_size_name": "2352 (CD raw)",
+    "cd_block_types": [
+        {"code": 0, "block_size": 2352, "name": "Raw data", "mandatory": False,
+         "result": "SUPPORTED", "detail": "GOOD"},
+        {"code": 8, "block_size": 2048, "name": "Mode 1 ISO/IEC 10149", "mandatory": True,
+         "result": "SUPPORTED", "detail": "GOOD"},
+    ],
     "commands": [{"opcode": "0x28", "name": "READ 10", "category": "SPC",
                   "result": "SUPPORTED", "detail": "GOOD"},
                  {"opcode": "0xA1", "name": "BLANK", "category": "DANGEROUS",
@@ -83,6 +90,8 @@ def main():
     assert app._info_labels["vendor"]["text"] == "HL-DT-ST"
     assert app._info_labels["current_profile"]["text"] == "0x0041 (BD-R Sequential)"
     assert app._info_labels["media"]["text"] == "BD-R (disc type 0x0d)"
+    assert app._info_labels["block_size"]["text"] == "2352 (CD raw)"
+    assert "Mode 1 ISO/IEC 10149" in app.blocktype_txt.get("1.0", "end")
     assert len(app.matrix.get_children()) == 2
     assert "檢測完成" in app.status_var.get()
     assert str(app.export_btn["state"]) == "normal", "export enabled after result"

@@ -48,6 +48,25 @@ SCSI_IOCTL_DATA_IN = 1
 SCSI_IOCTL_DATA_OUT = 0
 SCSI_IOCTL_DATA_UNSPECIFIED = 2
 
+MAX_SECTOR_SIZE = 2352  # CD raw sector (DVD/BD/HD-DVD are fixed 2048 B)
+
+# MMC-6 Table 600 — READ CD Data Block Type (byte 1 bits 7-2): block size,
+# name and Mandatory/Optional status. Codes 4-6 are Reserved, 7/15 NA Vendor
+# Specific (never probed). Codes 8/10/13 are Mandatory for CD drives.
+CD_BLOCK_TYPES = {
+    0:  {"size": 2352, "name": "Raw data", "mandatory": False},
+    1:  {"size": 2368, "name": "Raw data with P and Q Sub-channel", "mandatory": False},
+    2:  {"size": 2448, "name": "Raw data with P-W Sub-channel appended, pack form", "mandatory": False},
+    3:  {"size": 2448, "name": "Raw data with raw P-W Sub-channel appended", "mandatory": False},
+    8:  {"size": 2048, "name": "Mode 1 ISO/IEC 10149", "mandatory": True},
+    9:  {"size": 2336, "name": "Mode 2 ISO/IEC 10149", "mandatory": False},
+    10: {"size": 2048, "name": "Mode 2 CD-ROM XA form 1", "mandatory": True},
+    11: {"size": 2056, "name": "Mode 2 XA form 1 + 8B sub-header", "mandatory": False},
+    12: {"size": 2324, "name": "Mode 2 XA form 2", "mandatory": False},
+    13: {"size": 2332, "name": "Mode 2 XA form 1/2 mixed + 8B sub-header", "mandatory": True},
+}
+CD_BLOCK_TYPE_CODES = (0, 1, 2, 3, 8, 9, 10, 11, 12, 13)
+
 # ---------------------------------------------------------------------------
 # Lookup tables (built in per spec)
 # ---------------------------------------------------------------------------
@@ -134,7 +153,7 @@ CMDS = [
     {"op": 0x1B, "name": "START STOP UNIT", "cat": "SPC", "cdb": bytes([0x1B, 0x01, 0, 0, 0x01, 0]), "alloc": 0},  # IMMED+START, no LoEJ
     {"op": 0x1E, "name": "PREVENT ALLOW MEDIUM REMOVAL", "cat": "SPC", "cdb": bytes([0x1E, 0, 0, 0, 0x00, 0]), "alloc": 0},  # prevent=0
     {"op": 0x25, "name": "READ CAPACITY", "cat": "SPC", "cdb": bytes([0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 8},
-    {"op": 0x28, "name": "READ 10", "cat": "SPC", "cdb": bytes([0x28, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0]), "alloc": 512},  # LBA=0, transfer len=1 block (512B, matches alloc)
+    {"op": 0x28, "name": "READ 10", "cat": "SPC", "cdb": bytes([0x28, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0]), "alloc": 512},  # LBA=0, transfer len=1 block; alloc overridden at runtime to media block size (READ CAPACITY) or 2352 fallback
     {"op": 0x2B, "name": "SEEK 10", "cat": "SPC", "cdb": bytes([0x2B, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0},
     {"op": 0x2F, "name": "VERIFY 10", "cat": "SPC", "cdb": bytes([0x2F, 0, 0, 0, 0, 0, 0, 0x00, 0, 0]), "alloc": 0},  # BYTCHK=0,len=0
     {"op": 0x35, "name": "SYNCHRONIZE CACHE 10", "cat": "SPC", "cdb": bytes([0x35, 0, 0, 0, 0, 0, 0, 0x00, 0, 0]), "alloc": 0},  # range 0 = no-op
@@ -161,7 +180,7 @@ CMDS = [
     {"op": 0xAC, "name": "GET PERFORMANCE", "cat": "MMC", "cdb": bytes([0xAC, 0, 0x00, 0, 0, 0, 0, 0, 0x00, 0x01, 0, 0, 0x00, 0x20, 0, 0]), "alloc": 32},
     {"op": 0xAD, "name": "READ DVD STRUCTURE", "cat": "MMC", "cdb": bytes([0xAD, 0, 0x00, 0, 0, 0, 0, 0x00, 0x08, 0x00, 0, 0]), "alloc": 2048},
     {"op": 0xBB, "name": "SET CD SPEED", "cat": "MMC", "cdb": bytes([0xBB, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0]), "alloc": 0},  # max speed
-    {"op": 0xBE, "name": "READ CD", "cat": "MMC", "cdb": bytes([0xBE, 0x00, 0, 0, 0, 0, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]), "alloc": 2352},
+    {"op": 0xBE, "name": "READ CD", "cat": "MMC", "cdb": bytes([0xBE, 0x00, 0, 0, 0, 0, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]), "alloc": 2352},  # code 0 raw; runtime probes all Table 600 types (see cd_block_types)
 
     # ---- write-class (dangerous, default skipped; inert parameter CDBs only) ----
     {"op": 0x15, "name": "MODE SELECT 6", "cat": "DANGEROUS", "cdb": bytes([0x15, 0, 0x00, 0x00, 0x00, 0x00]), "alloc": 0, "dangerous": True},  # paramlen=0
@@ -387,6 +406,30 @@ def classify(status, sense, err_str):
         return "SUPPORTED", brief
     return "OTHER", brief + f" sense={sense.hex(' ')}"
 
+
+def classify_cd_block_type(status, sense, err_str):
+    """Per-Data-Block-Type result for READ CD (MMC Table 600).
+
+    Unlike classify(): for READ CD, a 'parameter rejected' (ILLEGAL REQUEST
+    + INVALID FIELD IN CDB 0x24 / LBA OUT OF RANGE 0x25) means the drive
+    rejects that particular block type, so the TYPE is NOT_SUPPORTED even
+    though the opcode exists (other types may still be SUPPORTED).
+    """
+    label, detail = classify(status, sense, err_str)
+    if label == "SUPPORTED":
+        key = sense[2] & 0x0F if len(sense) > 2 else 0
+        asc = sense[12] if len(sense) > 12 else 0
+        if key == 0x05 and asc in (0x24, 0x25):
+            return "NOT_SUPPORTED", detail
+    return label, detail
+
+
+def _read_cd_cdb(code):
+    """READ CD (0xBE) CDB for one Data Block Type code: byte 1 bits 7-2 =
+    code, byte 6 = user-data flag for user-data types (8-13), 1 block."""
+    byte6 = 0x10 if code >= 8 else 0x00  # User Data bit for user-data types
+    return bytes([0xBE, (code & 0x3F) << 2, 0, 0, 0, 0, byte6, 0x00, 0x01, 0, 0, 0])
+
 # ---------------------------------------------------------------------------
 # Payload parsers
 # ---------------------------------------------------------------------------
@@ -450,6 +493,15 @@ def name_feature(code):
 def name_disc_type(t):
     return DISC_TYPE_NAMES.get(t, "unknown")
 
+def name_block_size(size):
+    """Human label for a READ CAPACITY block length (media sector size).
+    2352 = CD raw sector; DVD/BD/HD-DVD are fixed 2048; None = no media."""
+    if size is None:
+        return "unknown"
+    if size == 2352:
+        return "2352 (CD raw)"
+    return str(size)
+
 def name_peripheral(t):
     return PERIPHERAL_NAMES.get(t, "unknown")
 
@@ -504,6 +556,8 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
         "serial_number": None,
         "current_profile": None, "current_profile_name": None,
         "profiles": [], "features": [], "media_type": None,
+        "media_block_size": None, "media_block_size_name": "unknown",
+        "cd_block_types": [],
         "commands": [], "summary": {}, "duration_sec": 0.0,
     }
 
@@ -541,7 +595,37 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
     else:
         result["media_type"] = "unknown"
 
-    # 4) Command matrix (cache the three already-executed commands)
+    # 4) READ CAPACITY — media sector (block) size; READ 10 alloc depends on
+    #    it (CD raw is 2352 B, DVD/BD/HD-DVD are fixed 2048 B).
+    media_block_size = None
+    rc_status, rc_sense, rc_data, rc_err = scsi_execute(
+        dev, bytes([0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0]), 8, timeout_s)
+    if not rc_err and rc_status == 0x00 and len(rc_data) >= 8:
+        block_len = struct.unpack(">I", rc_data[4:8])[0]
+        if block_len > 0:
+            media_block_size = block_len
+    result["media_block_size"] = media_block_size
+    result["media_block_size_name"] = name_block_size(media_block_size)
+
+    # 5) READ CD — probe every valid Data Block Type (MMC Table 600).
+    #    Each type gets its own classification; the command-level 0xBE row in
+    #    the matrix reuses the code-0 result (no duplicate ioctl).
+    read_cd_cmd = {}
+    cd_block_types = []
+    for code in CD_BLOCK_TYPE_CODES:
+        bt = CD_BLOCK_TYPES[code]
+        status, sense, data, err = scsi_execute(dev, _read_cd_cdb(code), bt["size"], timeout_s)
+        label, detail = classify_cd_block_type(status, sense, err)
+        if code == 0:
+            cmd_label, cmd_detail = classify(status, sense, err)
+            read_cd_cmd = {"label": cmd_label, "detail": cmd_detail}
+        cd_block_types.append({
+            "code": code, "block_size": bt["size"], "name": bt["name"],
+            "mandatory": bt["mandatory"], "result": label, "detail": detail,
+        })
+    result["cd_block_types"] = cd_block_types
+
+    # 6) Command matrix (cache the commands already executed above)
     cache = {}
     for cmd in CMDS:
         op = cmd["op"]
@@ -557,6 +641,18 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
                 cache[op] = ("SUPPORTED", "GOOD (cached from READ DISC INFORMATION)")
             else:
                 cache[op] = classify(di_status, di_sense, di_err)
+        elif op == 0x25:
+            if not rc_err and rc_status == 0x00:
+                cache[op] = ("SUPPORTED", "GOOD (cached from READ CAPACITY)")
+            else:
+                cache[op] = classify(rc_status, rc_sense, rc_err)
+        elif op == 0xBE:
+            if read_cd_cmd:
+                cache[op] = (read_cd_cmd["label"],
+                             read_cd_cmd["detail"] + " (code 0; see CD Data Block Type matrix)")
+            else:
+                status, sense, data, err = scsi_execute(dev, cmd["cdb"], cmd["alloc"], timeout_s)
+                cache[op] = classify(status, sense, err)
 
     summary = {"SUPPORTED": 0, "NOT_SUPPORTED": 0, "NEEDS_MEDIA": 0,
                "SKIPPED": 0, "TIMEOUT": 0, "OTHER": 0}
@@ -581,7 +677,13 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
         if op in cache:
             label, detail = cache[op]
         else:
-            status, sense, data, err = scsi_execute(dev, cmd["cdb"], cmd["alloc"], timeout_s)
+            # READ 10 transfers exactly 1 block — allocate the media's actual
+            # sector size (READ CAPACITY) or the CD raw maximum when unknown.
+            if op == 0x28:
+                alloc = media_block_size or MAX_SECTOR_SIZE
+            else:
+                alloc = cmd["alloc"]
+            status, sense, data, err = scsi_execute(dev, cmd["cdb"], alloc, timeout_s)
             label, detail = classify(status, sense, err)
             entry["sense_hex"] = sense.hex(" ") if sense else ""
         entry["result"] = label
@@ -615,6 +717,7 @@ def format_human(r):
                      for f in r["features"]]
         lines.append(f"Features ({len(r['features'])}): " + ", ".join(feat_strs))
     lines.append(f"Media Detected         : {r['media_type']}")
+    lines.append(f"Media Block Size       : {r['media_block_size_name']}")
     lines.append("")
     lines.append("SCSI Command Matrix:")
     lines.append(f"  {'Opcode':<8}{'Name':<34}{'Category':<11}{'Result':<14}Detail")
@@ -622,6 +725,15 @@ def format_human(r):
         icon = {"SUPPORTED": "✅", "NOT_SUPPORTED": "❌", "NEEDS_MEDIA": "💿",
                 "SKIPPED": "🔒", "TIMEOUT": "⏱️", "OTHER": "⚠️"}.get(c["result"], "?")
         lines.append(f"  {c['opcode']:<8}{c['name']:<34}{c['category']:<11}{icon + ' ' + c['result']:<14} {c['detail']}")
+    if r.get("cd_block_types"):
+        lines.append("")
+        lines.append("CD Data Block Type Matrix (READ CD, MMC Table 600):")
+        lines.append(f"  {'Code':<5}{'Size':<7}{'Result':<14}Name")
+        for bt in r["cd_block_types"]:
+            icon = {"SUPPORTED": "✅", "NOT_SUPPORTED": "❌", "NEEDS_MEDIA": "💿",
+                    "SKIPPED": "🔒", "TIMEOUT": "⏱️", "OTHER": "⚠️"}.get(bt["result"], "?")
+            mand = "(M)" if bt["mandatory"] else "(O)"
+            lines.append(f"  {bt['code']:<5}{bt['block_size']:<7}{icon + ' ' + bt['result']:<14}{mand} {bt['name']}")
     s = r["summary"]
     lines.append("")
     lines.append(f"Summary: {s['SUPPORTED']} SUPPORTED / {s['NOT_SUPPORTED']} NOT SUPPORTED / "

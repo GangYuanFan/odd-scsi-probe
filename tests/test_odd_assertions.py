@@ -200,5 +200,88 @@ try:
 finally:
     op.scsi_execute = orig_exec
 
+print("== READ CD / MMC Table 600 (PM requirement) ==")
+check("10 valid block type codes", tuple(op.CD_BLOCK_TYPES) == (0, 1, 2, 3, 8, 9, 10, 11, 12, 13))
+check("CD_BLOCK_TYPE_CODES matches table", set(op.CD_BLOCK_TYPE_CODES) == set(op.CD_BLOCK_TYPES))
+check("sizes per MMC Table 600", [op.CD_BLOCK_TYPES[c]["size"] for c in (0, 1, 2, 3, 8, 9, 10, 11, 12, 13)] ==
+      [2352, 2368, 2448, 2448, 2048, 2336, 2048, 2056, 2324, 2332])
+check("mandatory flags (8/10/13 mandatory)", [op.CD_BLOCK_TYPES[c]["mandatory"] for c in (8, 10, 13)] == [True, True, True]
+      and op.CD_BLOCK_TYPES[0]["mandatory"] is False)
+cdb0 = op._read_cd_cdb(0)
+check("READ CD code 0 CDB (byte1=0, byte6=0)", cdb0 == bytes([0xBE, 0, 0, 0, 0, 0, 0x00, 0, 1, 0, 0, 0]), cdb0.hex())
+check("READ CD code 8 CDB (byte1=0x20, user data bit)",
+      op._read_cd_cdb(8)[1] == 0x20 and op._read_cd_cdb(8)[6] == 0x10)
+check("READ CD code 13 CDB (byte1=0x34)", op._read_cd_cdb(13)[1] == 0x34)
+bt24 = bytes([0x70, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x24, 0x00])
+check("block type 0x24 -> type NOT_SUPPORTED",
+      op.classify_cd_block_type(0x02, bt24, "")[0] == "NOT_SUPPORTED")
+check("block type 0x25 -> type NOT_SUPPORTED",
+      op.classify_cd_block_type(0x02, bytes([0x70, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x25, 0x00]), "")[0] == "NOT_SUPPORTED")
+check("block type 0x20 -> NOT_SUPPORTED (no such command)",
+      op.classify_cd_block_type(0x02, bytes([0x70, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x20, 0x00]), "")[0] == "NOT_SUPPORTED")
+check("block type NEEDS_MEDIA kept",
+      op.classify_cd_block_type(0x02, bytes([0x70, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3A, 0x00]), "")[0] == "NEEDS_MEDIA")
+check("block type GOOD -> SUPPORTED", op.classify_cd_block_type(0x00, b"", "")[0] == "SUPPORTED")
+
+print("== sector size / READ 10 dynamic allocation (PM requirement) ==")
+check("name_block_size(None) == unknown", op.name_block_size(None) == "unknown")
+check("name_block_size(2352) == '2352 (CD raw)'", op.name_block_size(2352) == "2352 (CD raw)")
+check("name_block_size(2048) == '2048'", op.name_block_size(2048) == "2048")
+readcd = next(c for c in op.CMDS if c["op"] == 0xBE)
+check("READ CD alloc >= 2352 (raw sector max)", readcd["alloc"] >= 2352, str(readcd["alloc"]))
+check("READ 10 static alloc >= 512 (min sector)", read10["alloc"] >= 512)
+# CDB/alloc consistency: sector-transfer READ commands must allocate at
+# least one full sector; fixed-structure responses (sense, capacities,
+# keys) legitimately use small buffers and are not sector-based.
+for opc, min_alloc in ((0x28, 512), (0xAD, 2048), (0xBE, 2352)):
+    cmd = next(c for c in op.CMDS if c["op"] == opc)
+    check(f"0x{opc:02X} alloc >= {min_alloc} (sector-sized)", cmd["alloc"] >= min_alloc, str(cmd["alloc"]))
+check("READ 10 CDB transfer len = 1 block (bytes 7-8)", read10["cdb"][7:9] == bytes([0x00, 0x01]))
+# dynamic alloc: READ CAPACITY block size feeds READ 10 alloc
+orig_exec = op.scsi_execute
+
+def make_exec(rc_block_size=None):
+    calls = []
+    def exec_(path, cdb, alloc, timeout_s):
+        calls.append((cdb[0], alloc))
+        if cdb[0] == 0x25:
+            if rc_block_size is None:
+                return (0x02, bytes([0x70, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x20, 0x00]), b"", "")
+            return (0x00, b"", (0).to_bytes(4, "big") + rc_block_size.to_bytes(4, "big"), "")
+        return (0x00, b"", b"\x00" * max(alloc, 1), "")
+    return exec_, calls
+
+try:
+    for bs, want, name in ((2352, 2352, "CD raw"), (2048, 2048, "DVD/BD"), (4096, 4096, "odd sector")):
+        exec_, calls = make_exec(bs)
+        op.scsi_execute = exec_
+        r = op.probe_device("/dev/fake", 1, False)
+        alloc = next(c for c in calls if c[0] == 0x28)[1]
+        check(f"READ 10 alloc == block size {bs} ({name})", alloc == want, str(alloc))
+        check(f"media_block_size reported ({name})", r["media_block_size"] == bs)
+    exec_, calls = make_exec(None)
+    op.scsi_execute = exec_
+    r = op.probe_device("/dev/fake", 1, False)
+    alloc = next(c for c in calls if c[0] == 0x28)[1]
+    check("READ CAPACITY fail -> READ 10 alloc fallback 2352", alloc == 2352, str(alloc))
+    check("no media -> media_block_size unknown", r["media_block_size"] is None
+          and r["media_block_size_name"] == "unknown")
+    exec_, calls = make_exec(2048)
+    op.scsi_execute = exec_
+    r = op.probe_device("/dev/fake", 1, False)
+    be_calls = [c for c in calls if c[0] == 0xBE]
+    check("READ CD probed once per valid block type (10)", len(be_calls) == 10, str(len(be_calls)))
+    check("per-type alloc matches Table 600 sizes",
+          [c[1] for c in be_calls] == [op.CD_BLOCK_TYPES[code]["size"] for code in op.CD_BLOCK_TYPE_CODES])
+    check("cd_block_types reported (10 entries)", len(r["cd_block_types"]) == 10)
+    by_code = {bt["code"]: bt for bt in r["cd_block_types"]}
+    check("block type 0 mandatory=False / 8 mandatory=True",
+          by_code[0]["mandatory"] is False and by_code[8]["mandatory"] is True)
+    row_be = next(c for c in r["commands"] if c["opcode"] == "0xBE")
+    check("matrix 0xBE cached from code 0 (no dup ioctl)",
+          len(be_calls) == 10 and "CD Data Block Type matrix" in row_be["detail"])
+finally:
+    op.scsi_execute = orig_exec
+
 print(f"\nRESULT: {passed} passed / {failed} failed")
 sys.exit(1 if failed else 0)

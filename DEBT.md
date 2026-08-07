@@ -8,6 +8,7 @@
 | 2026-08-07 | `odd_probe.py` `parse_get_configuration()` / `parse_disc_info()` | 以構造資料單元測試驗證（本機僅 WSL2 Virtual Disk，無真實 ODD） | 開發環境無真實光碟裝置 | 以真實 ODD（CD/DVD/BD 各一片 media）實測解析 | High |
 | 2026-08-07 | `odd_probe.py` `probe_device()` | INQUIRY / GET CONFIGURATION / READ DISC INFO 三指令結果快取至指令矩陣（不重發） | 避免重複 ioctl、降低 hang 風險 | 無需升級：設計選擇 | Low |
 | 2026-08-07 | `odd_probe.py` `READ CD` CDB byte1=0x00 | 任務書註解「user=1」與值 0x00 矛盾，依值實作 | READ CD byte1 bit5=user data；0x00 表示不讀 user data，僅測 opcode 存在性 | 實機驗證時若需讀 1 sector user data，設 byte1=0x10 | Low |
+| 2026-08-07 | `odd_probe.py` `probe_device()` READ CD block types | 每裝置多發 10 次 READ CD ioctl（MMC Table 600 各 code 一次） | PM 需求：type 級支援度鑑別（燒錄機 vs 唯讀機）；無 CD media 時成本為 10 次快速 CHECK CONDITION | 若需加速：以 GET CONFIGURATION 的 CD Read feature 存在與否先行過濾 | Low |
 
 ---
 *Note: All `ponytail:` comments in code must have a corresponding entry here.*

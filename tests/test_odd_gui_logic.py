@@ -34,6 +34,15 @@ FAKE_RESULT = {
         {"code": 0x001E, "current": False, "persistent": False},
     ],
     "media_type": "BD-R (disc type 0x0d)",
+    "media_block_size": 2048, "media_block_size_name": "2048",
+    "cd_block_types": [
+        {"code": 0, "block_size": 2352, "name": "Raw data", "mandatory": False,
+         "result": "SUPPORTED", "detail": "GOOD"},
+        {"code": 8, "block_size": 2048, "name": "Mode 1 ISO/IEC 10149", "mandatory": True,
+         "result": "SUPPORTED", "detail": "GOOD"},
+        {"code": 13, "block_size": 2332, "name": "Mode 2 XA form 1/2 mixed + 8B sub-header",
+         "mandatory": True, "result": "NOT_SUPPORTED", "detail": "ILLEGAL REQUEST"},
+    ],
     "commands": [
         {"opcode": "0x28", "name": "READ 10", "category": "SPC", "result": "SUPPORTED", "detail": "GOOD"},
         {"opcode": "0x51", "name": "READ DISC INFORMATION", "category": "MMC", "result": "SUPPORTED", "detail": "GOOD"},
@@ -57,6 +66,11 @@ check("info.peripheral_type formatted", m["info"]["peripheral_type"] == "0x05 (C
 check("info.serial", m["info"]["serial"] == "K9AB1234567")
 check("info.current_profile formatted", m["info"]["current_profile"] == "0x0041 (BD-R Sequential)")
 check("info.media", m["info"]["media"] == "BD-R (disc type 0x0d)")
+check("info.block_size", m["info"]["block_size"] == "2048")
+check("3 block types with fields", len(m["block_types"]) == 3
+      and m["block_types"][0] == {"code": 0, "block_size": 2352, "name": "Raw data",
+                                   "mandatory": False, "result": "SUPPORTED", "detail": "GOOD"}
+      and m["block_types"][2]["result"] == "NOT_SUPPORTED")
 check("3 profiles with names", [p["name"] for p in m["profiles"]] ==
       ["CD-ROM", "BD-ROM", "BD-R Sequential"])
 check("profile current flags", [p["current"] for p in m["profiles"]] == [True, False, True])
@@ -71,7 +85,9 @@ print("== build_display_model(): sparse/empty result (robustness) ==")
 m2 = gui.build_display_model({})
 check("missing keys -> safe defaults", m2["info"]["vendor"] == "?"
       and m2["info"]["peripheral_type"] == "?" and m2["info"]["serial"] == "n/a")
+check("block size default unknown", m2["info"]["block_size"] == "unknown")
 check("empty lists -> []", m2["profiles"] == [] and m2["features"] == [] and m2["rows"] == [])
+check("empty block types -> []", m2["block_types"] == [])
 check("empty summary -> zeros", m2["stats"] == dict.fromkeys(gui.RESULT_ORDER, 0))
 check("duration None tolerated", m2["duration"] is None)
 
@@ -84,7 +100,7 @@ print("== result taxonomy consistency ==")
 check("RESULT_ORDER covers 6 classes", len(gui.RESULT_ORDER) == 6)
 check("icons cover all results", set(gui.RESULT_ICON) == set(gui.RESULT_ORDER))
 check("tag colors cover all results", set(gui.RESULT_TAG_COLORS) == set(gui.RESULT_ORDER))
-check("INFO_FIELDS non-empty", len(gui.INFO_FIELDS) == 8)
+check("INFO_FIELDS non-empty", len(gui.INFO_FIELDS) == 9)
 
 print(f"\nRESULT: {passed} passed / {failed} failed")
 sys.exit(1 if failed else 0)

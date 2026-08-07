@@ -37,7 +37,7 @@ RESULT_TAG_COLORS = {"SUPPORTED": "#1b7a2e", "NOT_SUPPORTED": "#c62828",
 INFO_FIELDS = (("device", "裝置"), ("vendor", "Vendor"), ("product", "Product"),
                ("revision", "Revision"), ("peripheral_type", "Peripheral Type"),
                ("serial", "Serial Number"), ("current_profile", "Current Profile"),
-               ("media", "Media Detected"))
+               ("media", "Media Detected"), ("block_size", "Media Block Size"))
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +54,7 @@ def build_display_model(result):
         "serial": result.get("serial_number") or "n/a",
         "current_profile": "?",
         "media": result.get("media_type") or "unknown",
+        "block_size": result.get("media_block_size_name") or "unknown",
     }
     pt = result.get("peripheral_type")
     if pt is not None:
@@ -69,10 +70,17 @@ def build_display_model(result):
     rows = [{"opcode": c.get("opcode", "?"), "name": c.get("name", "?"),
              "category": c.get("category", "?"), "result": c.get("result", "?"),
              "detail": c.get("detail", "")} for c in result.get("commands", [])]
+    block_types = [
+        {"code": b.get("code"), "block_size": b.get("block_size"),
+         "name": b.get("name", ""), "mandatory": bool(b.get("mandatory")),
+         "result": b.get("result", "?"), "detail": b.get("detail", "")}
+        for b in result.get("cd_block_types", [])
+    ]
     summary = result.get("summary", {})
     stats = {k: int(summary.get(k, 0)) for k in RESULT_ORDER}
     return {"info": info, "profiles": profiles, "features": features,
-            "rows": rows, "stats": stats, "duration": result.get("duration_sec")}
+            "rows": rows, "block_types": block_types,
+            "stats": stats, "duration": result.get("duration_sec")}
 
 
 def stats_line(stats):
@@ -168,6 +176,7 @@ class OddProbeApp(tk.Tk):
         frame.columnconfigure(0, weight=1, uniform="f")
         frame.columnconfigure(1, weight=1, uniform="f")
         frame.rowconfigure(1, weight=1)
+        frame.rowconfigure(3, weight=1)
         ttk.Label(frame, text="支援的 Profile（[*] = current）").grid(
             row=0, column=0, sticky="w", pady=(0, 4))
         ttk.Label(frame, text="Feature List").grid(row=0, column=1, sticky="w", pady=(0, 4))
@@ -175,6 +184,10 @@ class OddProbeApp(tk.Tk):
         prof_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 4))
         feat_frame, self.feature_txt = self._make_text_area(frame)
         feat_frame.grid(row=1, column=1, sticky="nsew", padx=(4, 0))
+        ttk.Label(frame, text="CD Data Block Type 支援矩陣（READ CD, MMC Table 600）").grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=(8, 4))
+        bt_frame, self.blocktype_txt = self._make_text_area(frame)
+        bt_frame.grid(row=3, column=0, columnspan=2, sticky="nsew")
         return frame
 
     def _build_matrix_tab(self, parent):
@@ -330,6 +343,7 @@ class OddProbeApp(tk.Tk):
         model = build_display_model(result)
         self._fill_info(model["info"])
         self._fill_formats(model["profiles"], model["features"])
+        self._fill_block_types(model["block_types"])
         self._fill_matrix(model["rows"])
         self._fill_stats(model)
         self.status_var.set(f"檢測完成（{model['duration'] or 0:.1f}s）：{stats_line(model['stats'])}")
@@ -361,6 +375,7 @@ class OddProbeApp(tk.Tk):
             lbl.config(text="—")
         self._set_text(self.profile_txt, "（尚未檢測）")
         self._set_text(self.feature_txt, "（尚未檢測）")
+        self._set_text(self.blocktype_txt, "（尚未檢測）")
         self.matrix.delete(*self.matrix.get_children())
         for lbl in self._stat_labels.values():
             lbl.config(text="0")
@@ -377,6 +392,17 @@ class OddProbeApp(tk.Tk):
                       for f in features] or ["（無 feature 資料）"]
         self._set_text(self.profile_txt, "\n".join(prof_lines))
         self._set_text(self.feature_txt, "\n".join(feat_lines))
+
+    def _fill_block_types(self, block_types):
+        if not block_types:
+            self._set_text(self.blocktype_txt, "（無資料）")
+            return
+        lines = ["Code   Size   Result         Mandatory  Name"]
+        for b in block_types:
+            icon = RESULT_ICON.get(b["result"], "?")
+            mand = "(M)" if b["mandatory"] else "(O)"
+            lines.append(f"{b['code']:<6}{b['block_size']:<7}{icon + ' ' + b['result']:<15}{mand:<11}{b['name']}")
+        self._set_text(self.blocktype_txt, "\n".join(lines))
 
     def _fill_matrix(self, rows):
         self.matrix.delete(*self.matrix.get_children())
@@ -396,6 +422,7 @@ class OddProbeApp(tk.Tk):
                  f"Vendor/Product : {info['vendor']} / {info['product']}",
                  f"Serial         : {info['serial']}",
                  f"Media          : {info['media']}",
+                 f"Block Size     : {info['block_size']}",
                  f"檢測耗時       : {model['duration'] or 0:.1f}s",
                  f"指令總數       : {sum(stats.values())}",
                  "", stats_line(stats)]
