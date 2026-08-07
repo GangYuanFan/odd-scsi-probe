@@ -114,6 +114,40 @@ pyinstaller --onefile --windowed --name odd-probe odd_probe_gui.py
 | BD | BD-ROM, BD-R (Seq/Random), BD-RE |
 | HD-DVD | HD DVD-ROM, HD DVD-R, HD DVD-RAM, HD DVD-RW, HD DVD-R DL, HD DVD-RW DL |
 
+## Sector Size 差異（MMC Table 600）
+
+光碟的邏輯 sector size **不是固定值**，會影響 READ 類指令的 buffer 配置：
+
+- **DVD / BD / HD-DVD 以上**：固定 **2048 B**（mode 1 user data）
+- **CD**：依 READ CD (0xBE) 的 Data Block Type code 而定，有 8 種有效大小（2048~2448），最常見為 **2048（mode 1）** 與 **2352（raw）**
+
+本工具的處理方式：
+
+1. **READ 10 (0x28)**：先發 READ CAPACITY (0x25) 取得目前 media 的 block length（= sector size），READ 10 的 allocation 動態設為該值（CDB transfer len 恆為 1 block）；READ CAPACITY 失敗（無 media）時 fallback **2352**（最大可能 CD sector）
+2. **READ CD (0xBE)**：對每個有效 Data Block Type code 各發一次探測（allocation = 該 type 的 block size），報告輸出「CD Data Block Type 支援矩陣」— 燒錄機 vs 唯讀機的支援度差異在此最明顯
+3. 報告顯示 `Media Block Size`（例如 `2048` 或 `2352 (CD raw)`），無 media 顯示 `unknown`
+
+### MMC Table 600 — READ CD Data Block Type 摘要
+
+| Code | Block Size | 名稱 | Mandatory/Optional |
+| --- | --- | --- | --- |
+| 0 | 2352 | Raw data | Optional |
+| 1 | 2368 | Raw data with P and Q Sub-channel | Optional |
+| 2 | 2448 | Raw data with P-W Sub-channel appended, pack form | Optional |
+| 3 | 2448 | Raw data with raw P-W Sub-channel appended | Optional |
+| 4-6 | — | Reserved | — |
+| 7 | — | NA Vendor Specific | — |
+| 8 | 2048 | Mode 1 ISO/IEC 10149 | **Mandatory** |
+| 9 | 2336 | Mode 2 ISO/IEC 10149 | Optional |
+| 10 | 2048 | Mode 2 CD-ROM XA form 1 | **Mandatory** |
+| 11 | 2056 | Mode 2 XA form 1 + 8B sub-header | Optional |
+| 12 | 2324 | Mode 2 XA form 2 | Optional |
+| 13 | 2332 | Mode 2 XA form 1/2 mixed + 8B sub-header | **Mandatory** |
+| 14 | — | Reserved | — |
+| 15 | — | NA Vendor Specific | — |
+
+工具對 code 0/1/2/3/8/9/10/11/12/13 各探測一次；type 級分類：0x20（指令不存在）→ 整組 NOT_SUPPORTED，0x24/0x25（該 type 參數被拒）→ 該 type NOT_SUPPORTED，其餘同主矩陣判定邏輯。
+
 ## 指令矩陣分類
 
 | 類別 | 數量 | 說明 |
