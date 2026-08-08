@@ -192,7 +192,7 @@ CMDS = [
     {"op": 0x2F, "name": "VERIFY 10", "cat": "SPC", "cdb": bytes([0x2F, 0, 0, 0, 0, 0, 0, 0x00, 0, 0]), "alloc": 0, "dir": "none"},  # BYTCHK=0,len=0
     {"op": 0x35, "name": "SYNCHRONIZE CACHE / FLUSH CACHE", "cat": "SPC", "cdb": bytes([0x35, 0, 0, 0, 0, 0, 0, 0x00, 0, 0]), "alloc": 0, "dir": "none"},  # range 0 = no-op; MMC-2 FLUSH CACHE = ATAPI 12-byte variant of same opcode
     {"op": 0x3C, "name": "READ BUFFER", "cat": "SPC", "cdb": bytes([0x3C, 0x00, 0x00, 0, 0, 0, 0x00, 0x04, 0, 0]), "alloc": 4, "dir": "in"},  # mode 0 capacity header
-    {"op": 0x5A, "name": "MODE SENSE 10", "cat": "SPC", "cdb": bytes([0x5A, 0, 0x3F, 0, 0, 0, 0, 0, 0xFF, 0xFF]), "alloc": 65535, "dir": "in"},
+    {"op": 0x5A, "name": "MODE SENSE 10", "cat": "SPC", "cdb": bytes([0x5A, 0, 0x3F, 0, 0, 0, 0, 0, 0x10, 0x00]), "alloc": 4096, "dir": "in"},  # P1-8: alloc 4096 (Windows SCSI_PASS_THROUGH 64KB cap; MMC allows truncated responses),
     {"op": 0x1C, "name": "RECEIVE DIAGNOSTIC RESULTS", "cat": "SPC", "cdb": bytes([0x1C, 0, 0x00, 0x00, 0x04, 0]), "alloc": 4, "dir": "in"},
     {"op": 0x1D, "name": "SEND DIAGNOSTIC", "cat": "SPC", "cdb": bytes([0x1D, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none"},  # self-test=0
     # ---- MMC-4 / SPC legacy additions (v1.2.1) ----
@@ -209,13 +209,13 @@ CMDS = [
     {"op": 0x43, "name": "READ TOC/PMA/ATIP", "cat": "MMC", "cdb": bytes([0x43, 0, 0, 0x00, 0, 0x00, 0x10, 0x00, 0, 0]), "alloc": 4096, "dir": "in"},
     {"op": 0x44, "name": "READ HEADER", "cat": "MMC", "cdb": bytes([0x44, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x20]), "alloc": 32, "dir": "in", "legacy": True},  # Annex E
     {"op": 0x45, "name": "PLAY AUDIO 10", "cat": "MMC", "cdb": bytes([0x45, 0, 0, 0, 0, 0, 0x00, 0x00, 0x01, 0]), "alloc": 0, "dir": "none", "legacy": True, "dangerous": True},  # 10-byte per SFF-8020i Table 72; TL at bytes 7-8 = 0x0001 (kernel cdrom_play_blk); real play in --dangerous
-    {"op": 0x46, "name": "GET CONFIGURATION", "cat": "MMC", "cdb": bytes([0x46, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), "alloc": 65535, "dir": "in"},
+    {"op": 0x46, "name": "GET CONFIGURATION", "cat": "MMC", "cdb": bytes([0x46, 0, 0, 0, 0, 0, 0, 0x10, 0x00, 0]), "alloc": 4096, "dir": "in"},  # P1-8: alloc + CDB allocation length 4096 (was 65535 -> SCSI_PASS_THROUGH >64KB),
     {"op": 0x47, "name": "PLAY AUDIO MSF", "cat": "MMC", "cdb": bytes([0x47, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "legacy": True, "dangerous": True},
     {"op": 0x48, "name": "PLAY AUDIO TRACK INDEX", "cat": "MMC", "cdb": bytes([0x48, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "legacy": True, "dangerous": True},
     {"op": 0x4A, "name": "GET EVENT STATUS NOTIFICATION", "cat": "MMC", "cdb": bytes([0x4A, 0x01, 0x00, 0, 0, 0, 0x00, 0x08, 0, 0]), "alloc": 8, "dir": "in"},
     {"op": 0x4B, "name": "PAUSE/RESUME", "cat": "MMC", "cdb": bytes([0x4B, 0, 0, 0, 0, 0, 0, 0, 0x00, 0]), "alloc": 0, "dir": "none", "legacy": True},  # resume=0 -> pause; Annex E
-    {"op": 0x51, "name": "READ DISC INFORMATION", "cat": "MMC", "cdb": bytes([0x51, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), "alloc": 65535, "dir": "in"},
-    {"op": 0x52, "name": "READ TRACK INFORMATION", "cat": "MMC", "cdb": bytes([0x52, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), "alloc": 65535, "dir": "in"},
+    {"op": 0x51, "name": "READ DISC INFORMATION", "cat": "MMC", "cdb": bytes([0x51, 0, 0, 0, 0, 0, 0, 0x10, 0x00, 0]), "alloc": 4096, "dir": "in"},  # P1-8: alloc + CDB allocation length 4096,
+    {"op": 0x52, "name": "READ TRACK INFORMATION", "cat": "MMC", "cdb": bytes([0x52, 0, 0, 0, 0, 0, 0, 0x10, 0x00, 0]), "alloc": 4096, "dir": "in"},  # P1-8: alloc + CDB allocation length 4096,
     {"op": 0xA0, "name": "REPORT LUNS", "cat": "MMC", "cdb": bytes([0xA0, 0, 0, 0, 0, 0, 0x00, 0x10, 0, 0, 0, 0]), "alloc": 16, "dir": "in"},  # SPC-3 12-byte REPORT LUNS — allocation length at bytes 6-7 = 0x0010 (was a malformed 6-byte CDB)
     {"op": 0xA2, "name": "SECURITY PROTOCOL IN", "cat": "MMC", "cdb": bytes([0xA2, 0x06, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0, 0]), "alloc": 16, "dir": "in"},  # protocol 06h OSSC (6.32); was wrongly labeled SEND KEY
     {"op": 0xA4, "name": "REPORT KEY", "cat": "MMC", "cdb": bytes([0xA4, 0, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x08, 0, 0]), "alloc": 8, "dir": "in"},  # key class 0
@@ -737,8 +737,9 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
         result["serial_number"] = inquiry_serial(dev, timeout_s)
 
     # 2) GET CONFIGURATION (also feeds the matrix below)
+    gc_cmd = next(c for c in CMDS if c["op"] == 0x46)
     gc_status, gc_sense, gc_data, gc_err = _scsi_execute_rescued(
-        dev, bytes([0x46, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), 65535, timeout_s)
+        dev, gc_cmd["cdb"], gc_cmd["alloc"], timeout_s)
     if not gc_err and gc_status == 0x00 and gc_data:
         current, profiles, features = parse_get_configuration(gc_data)
         result["current_profile"] = current
@@ -748,8 +749,9 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
 
     # 3) READ DISC INFORMATION
     disc_type = None
+    di_cmd = next(c for c in CMDS if c["op"] == 0x51)
     di_status, di_sense, di_data, di_err = _scsi_execute_rescued(
-        dev, bytes([0x51, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), 65535, timeout_s)
+        dev, di_cmd["cdb"], di_cmd["alloc"], timeout_s)
     if not di_err and di_status == 0x00:
         disc_type = parse_disc_info(di_data)
     if disc_type is not None:

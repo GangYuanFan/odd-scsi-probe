@@ -233,6 +233,11 @@ check("0xAC GET PERFORMANCE 12-byte CDB (MMC-6 Table 290: Max Descriptors bytes 
       gp["cdb"] == bytes([0xAC, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0x00, 0])
       and len(gp["cdb"]) == 12 and gp["cdb"][8:10] == (0x0001).to_bytes(2, "big") and gp["cdb"][10] == 0x00,
       gp["cdb"].hex())
+for opc, sl in ((0x46, 7), (0x51, 7), (0x52, 7), (0x5A, 8)):
+    c = next(c for c in op.CMDS if c["op"] == opc)
+    check(f"0x{opc:02X} alloc + CDB allocation length == 4096 (P1-8, Windows 64KB cap)",
+          c["alloc"] == 4096 and c["cdb"][sl:sl + 2] == (0x1000).to_bytes(2, "big"),
+          f"alloc={c['alloc']} cdb{sl}-{sl+1}={c['cdb'][sl:sl + 2].hex()}")
 check("12-byte CDBs (A8/AA/AB/BD) have len==12",
       all(len(next(c for c in op.CMDS if c["op"] == opc)["cdb"]) == 12 for opc in (0xA8, 0xAA, 0xAB, 0xBD)))
 rms = next(c for c in op.CMDS if c["op"] == 0xAB)
@@ -510,6 +515,14 @@ try:
     exec_, calls = make_exec(2048)
     op.scsi_execute = exec_
     r = op.probe_device("/dev/fake", 1, False)
+    gc_call = next(c for c in calls if c[0][0] == 0x46)
+    check("probe GET CONFIGURATION alloc == 4096 with CDB alloc 0x1000 (P1-8)",
+          gc_call[1] == 4096 and gc_call[0][7:9] == (0x1000).to_bytes(2, "big"),
+          f"alloc={gc_call[1]} cdb={gc_call[0].hex()}")
+    di_call = next(c for c in calls if c[0][0] == 0x51)
+    check("probe READ DISC INFO alloc == 4096 with CDB alloc 0x1000 (P1-8)",
+          di_call[1] == 4096 and di_call[0][7:9] == (0x1000).to_bytes(2, "big"),
+          f"alloc={di_call[1]} cdb={di_call[0].hex()}")
     be_calls = [c for c in calls if c[0][0] == 0xBE]
     check("READ CD probed once per valid block type (10)", len(be_calls) == 10, str(len(be_calls)))
     check("per-type alloc matches Table 600 sizes",
