@@ -104,6 +104,40 @@ CD_BLOCK_TYPES = {
 }
 CD_BLOCK_TYPE_CODES = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 
+# MMC-6 §6.22.3.2 — READ DISC STRUCTURE (0xAD) format codes for Media Type
+# 0000b (DVD types): 26 probed formats (00h-11h, 15h, 20h-24h, 30h, 31h).
+# Names follow the section titles. CDB layout (Table 381): byte 2 = Media
+# Type, byte 6 = Layer Number, byte 7 = Format, bytes 8-9 = Allocation Length
+# (0x0800 = 2048, the fixed DVD sector size).
+DVD_STRUCTURE_FORMATS = [
+    (0x00, "Physical Format Information"), (0x01, "DVD Copyright Information"),
+    (0x02, "Disc Key"), (0x03, "BCA Information"),
+    (0x04, "DVD Disc Manufacturing Information"), (0x05, "Copyright Management Information"),
+    (0x06, "Media Identifier"), (0x07, "Media Key Block"),
+    (0x08, "DVD-RAM Disc Definition Structure (DDS)"), (0x09, "DVD-RAM Medium Status"),
+    (0x0A, "DVD-RAM Spare Area Information"), (0x0B, "DVD-RAM Recording Type Information"),
+    (0x0C, "RMD in the last Border-out"), (0x0D, "Recording Management Area Data"),
+    (0x0E, "Pre-recorded Information in Lead-in"), (0x0F, "Unique Disc Identifier"),
+    (0x10, "Format Information of Control Data Zone in the Lead-in"), (0x11, "ADIP Information"),
+    (0x15, "Copyright Data Section from DVD-ROM3 (AACS adjusted)"),
+    (0x20, "DVD+/-R DL / DVD-Download DL Layer Capacity"),
+    (0x21, "DVD-R DL Middle Zone start address"), (0x22, "DVD-R DL Jump Interval Size"),
+    (0x23, "DVD-R DL Manual Layer Jump Address"),
+    (0x24, "DVD-R DL Remapping information of specified Anchor Point"),
+    (0x30, "Disc Control Blocks (DCBs)"), (0x31, "Read MTA ECC Block"),
+]
+# MMC-6 §6.22.3.3 — format codes for Media Type 0001b (BD): 7 probed formats.
+BD_STRUCTURE_FORMATS = [
+    (0x00, "Disc Information (DI)"), (0x03, "BCA Information"),
+    (0x08, "Disc Definition Structure (DDS)"), (0x09, "Cartridge Status"),
+    (0x0A, "Spare Area Information"), (0x12, "Raw Defect List (DFL)"),
+    (0x30, "Physical Access Control (PAC)"),
+]
+# MMC-6 Table 382 — Media Type codes: 0000b = DVD types, 0001b = BD
+# (0010b-1111b reserved; 0x05 is NOT a media type).
+DVD_MEDIA_TYPE = 0x00
+BD_MEDIA_TYPE = 0x01
+
 # ---------------------------------------------------------------------------
 # Lookup tables (built in per spec)
 # ---------------------------------------------------------------------------
@@ -176,11 +210,12 @@ ASC_NAMES = {
 }
 
 # ---------------------------------------------------------------------------
-# Command matrix: 72 opcodes = MMC-6 Table 7 optical-disc probe coverage
+# Command matrix: 71 opcodes = MMC-6 Table 7 optical-disc probe coverage
 # (mandatory/optional/legacy + SPC-3 inheritance; 49 MMC-6 opcodes incl.
 # VERIFY 12 0xAF — READ CD 0xBE is represented by the Table 352 block-type
-# matrix below) + 23 legacy/extra commands (SPC-3 variants / MMC Annex E /
-# MMC-4 gap closure)
+# matrix below and READ DVD STRUCTURE 0xAD by the §6.22.3 DVD/BD structure
+# format matrices below) + 23 legacy/extra commands (SPC-3 variants / MMC
+# Annex E / MMC-4 gap closure)
 # kept for completeness and flagged legacy. CDB templates per MMC-6 rev 2g
 # (T10/1836-D), cross-checked against SPC-3 for the security/read-media-serial
 # opcodes.
@@ -243,7 +278,6 @@ CMDS = [
     {"op": 0xA2, "name": "SECURITY PROTOCOL IN", "cat": "MMC", "cdb": bytes([0xA2, 0x06, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0, 0]), "alloc": 16, "dir": "in"},  # protocol 06h OSSC (6.32); was wrongly labeled SEND KEY
     {"op": 0xA4, "name": "REPORT KEY", "cat": "MMC", "cdb": bytes([0xA4, 0, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x08, 0, 0]), "alloc": 8, "dir": "in"},  # key class 0
     {"op": 0xAC, "name": "GET PERFORMANCE", "cat": "MMC", "cdb": bytes([0xAC, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0x00, 0]), "alloc": 32, "dir": "in"},  # MMC-6 Table 290: 12-byte CDB — Max Descriptors bytes 8-9 = 0x0001, Type byte 10 = 0x00 (was 16-byte with stray 0x20 tail),
-    {"op": 0xAD, "name": "READ DVD STRUCTURE", "cat": "MMC", "cdb": bytes([0xAD, 0, 0x00, 0, 0, 0, 0, 0x00, 0x08, 0x00, 0, 0]), "alloc": 2048, "dir": "in"},  # format 0 = physical
     {"op": 0xA8, "name": "READ 12", "cat": "MMC", "cdb": bytes([0xA8, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0, 0]), "alloc": 0, "dir": "in"},  # LBA=0, len=1; alloc runtime
     {"op": 0xAB, "name": "READ MEDIA SERIAL NUMBER", "cat": "MMC", "cdb": bytes([0xAB, 0x01, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x80, 0]), "alloc": 128, "dir": "in"},  # SERVICE ACTION IN (12) SA=01h; allocation length bytes 9-10 = 0x0080 (P1-5, was 0x8000=32768)
     {"op": 0xB9, "name": "READ CD MSF", "cat": "MMC", "cdb": bytes([0xB9, 0x00, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x10, 0x00, 0]), "alloc": 2352, "dir": "in"},  # MSF 0:0:0 -> 0:0:1, user data
@@ -281,9 +315,11 @@ CMDS = [
     {"op": 0xBA, "name": "SCAN", "cat": "DANGEROUS", "cdb": bytes([0xBA, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True, "legacy": True},  # 12-byte
 ]
 
-# Total probe steps = 72 opcodes + 10 READ CD Table 352 block types (82).
-# progress_cb totals and the GUI progress bar must use this, not len(CMDS).
-TOTAL_PROBE_STEPS = len(CMDS) + len(CD_BLOCK_TYPE_CODES)
+# Total probe steps = 71 opcodes + 10 READ CD Table 352 block types + 26
+# DVD structure formats + 7 BD structure formats (114). progress_cb totals
+# and the GUI progress bar must use this, not len(CMDS).
+TOTAL_PROBE_STEPS = (len(CMDS) + len(CD_BLOCK_TYPE_CODES)
+                     + len(DVD_STRUCTURE_FORMATS) + len(BD_STRUCTURE_FORMATS))
 
 # ---------------------------------------------------------------------------
 # Linux backend (SG_IO ioctl)
@@ -605,6 +641,15 @@ def _read_cd_cdb(code):
                   0x00, 0x00, 0x01, bt["flags"], bt["subch"], 0])
 
 
+def _read_disc_structure_cdb(media_type, fmt):
+    """READ DISC STRUCTURE (0xAD) CDB — MMC-6 Table 381. Byte 2 = Media Type
+    (0000b DVD / 0001b BD per Table 382), bytes 3-5 = Address (0), byte 6 =
+    Layer Number (0 — single layer, matches Linux dvd_read_physical), byte 7 =
+    Format code, bytes 8-9 = Allocation Length 0x0800 (2048 B), byte 10 =
+    AGID (0, unused for our formats), byte 11 = Control."""
+    return bytes([0xAD, 0, media_type, 0, 0, 0, 0x00, fmt, 0x08, 0x00, 0, 0])
+
+
 def _lba_to_msf(lba):
     """LBA -> CD MSF (minutes, seconds, frames). Frame 0 sits 2 s (150
     frames) into the lead-in, so LBA 0 == MSF 0:2:0; 1 min = 4500 frames."""
@@ -619,7 +664,7 @@ def _read_toc_first_track_msf(dev, timeout_s):
     """READ TOC (0x43, format 0) -> ((m, s, f) of the first track's start
     LBA, first track number), or None on any failure (no TOC / no media /
     unparseable data). Format 0 track descriptors start at response byte 4,
-    one per 10 bytes (MMC-6 Table 334): [0]=ADR/Control, [1]=track number,
+    one per 8 bytes (MMC-6 Table 476): [0]=ADR/Control, [1]=track number,
     [2..5]=reserved, [6..9]=start address (LBA, big-endian)."""
     status, sense, data, err = _scsi_execute_rescued(
         dev, bytes([0x43, 0, 0, 0x00, 0, 0x00, 0x10, 0x00, 0]), 4096, timeout_s)
@@ -797,6 +842,7 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
         "profiles": [], "features": [], "media_type": None,
         "media_block_size": None, "media_block_size_name": "unknown",
         "block_type_matrix": [],
+        "dvd_structure_matrix": [], "bd_structure_matrix": [],
         "commands": [], "summary": {}, "duration_sec": 0.0,
     }
 
@@ -853,7 +899,7 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
 
     # 5) READ CD — probe every Table 352 matrix row. Each
     #    type is one matrix row (alloc = that type's block size); results are
-    #    merged into the summary and drive the progress bar (82 total steps).
+    #    merged into the summary and drive the progress bar (114 total steps).
     block_type_matrix = []
     for code in CD_BLOCK_TYPE_CODES:
         bt = CD_BLOCK_TYPES[code]
@@ -866,7 +912,34 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
         })
     result["block_type_matrix"] = block_type_matrix
 
-    # 6) Command matrix (cache the commands already executed above)
+    # 6) READ DISC STRUCTURE (0xAD) — probe every MMC-6 §6.22.3 format code.
+    #    DVD media type 0000b (26 formats) and BD media type 0001b (7 formats);
+    #    one row per format, alloc = 2048 (fixed DVD/BD sector size).
+    dvd_structure_matrix = []
+    for fmt, fname in DVD_STRUCTURE_FORMATS:
+        status, sense, data, err = _scsi_execute_rescued(
+            dev, _read_disc_structure_cdb(DVD_MEDIA_TYPE, fmt), 2048, timeout_s)
+        label, detail = classify(status, sense, err)
+        dvd_structure_matrix.append({
+            "format": f"0x{fmt:02X}", "name": fname, "media_type": DVD_MEDIA_TYPE,
+            "result": label, "detail": detail,
+            "sense_hex": sense.hex(" ") if sense else "",
+        })
+    result["dvd_structure_matrix"] = dvd_structure_matrix
+
+    bd_structure_matrix = []
+    for fmt, fname in BD_STRUCTURE_FORMATS:
+        status, sense, data, err = _scsi_execute_rescued(
+            dev, _read_disc_structure_cdb(BD_MEDIA_TYPE, fmt), 2048, timeout_s)
+        label, detail = classify(status, sense, err)
+        bd_structure_matrix.append({
+            "format": f"0x{fmt:02X}", "name": fname, "media_type": BD_MEDIA_TYPE,
+            "result": label, "detail": detail,
+            "sense_hex": sense.hex(" ") if sense else "",
+        })
+    result["bd_structure_matrix"] = bd_structure_matrix
+
+    # 7) Command matrix (cache the commands already executed above)
     cache = {}
     for cmd in CMDS:
         op = cmd["op"]
@@ -972,12 +1045,24 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
         summary[label] = summary.get(label, 0) + 1
         result["commands"].append(entry)
 
-    # 7) Block type results are part of the probe: merged into the summary
-    #    and counted by the progress bar (total = TOTAL_PROBE_STEPS).
+    # 8) Matrix results are part of the probe: merged into the summary and
+    #    counted by the progress bar (total = TOTAL_PROBE_STEPS). Order: 71
+    #    commands, 10 READ CD block types, 26 DVD structures, 7 BD structures.
     for bi, bt in enumerate(block_type_matrix):
         if progress_cb:
             progress_cb(len(CMDS) + bi + 1, TOTAL_PROBE_STEPS)
         summary[bt["result"]] = summary.get(bt["result"], 0) + 1
+
+    for di, row in enumerate(dvd_structure_matrix):
+        if progress_cb:
+            progress_cb(len(CMDS) + len(CD_BLOCK_TYPE_CODES) + di + 1, TOTAL_PROBE_STEPS)
+        summary[row["result"]] = summary.get(row["result"], 0) + 1
+
+    for bi, row in enumerate(bd_structure_matrix):
+        if progress_cb:
+            progress_cb(len(CMDS) + len(CD_BLOCK_TYPE_CODES) + len(DVD_STRUCTURE_FORMATS) + bi + 1,
+                        TOTAL_PROBE_STEPS)
+        summary[row["result"]] = summary.get(row["result"], 0) + 1
 
     result["summary"] = summary
     result["duration_sec"] = round(time.time() - t0, 2)
@@ -1025,6 +1110,22 @@ def format_human(r):
             icon = {"SUPPORTED": "✅", "NOT_SUPPORTED": "❌", "NEEDS_MEDIA": "💿",
                     "SKIPPED": "🔒", "TIMEOUT": "⏱️", "OTHER": "⚠️"}.get(bt["result"], "?")
             lines.append(f"  {bt['code']:<6}{bt['size']:<7}{bt['name']:<50}{icon} {bt['result']}")
+    if r.get("dvd_structure_matrix"):
+        lines.append("")
+        lines.append("DVD Disc Structure Matrix (READ DISC STRUCTURE 0xAD, media type 0x00):")
+        lines.append(f"  {'Format':<8}{'Structure':<58}Result")
+        for row in r["dvd_structure_matrix"]:
+            icon = {"SUPPORTED": "✅", "NOT_SUPPORTED": "❌", "NEEDS_MEDIA": "💿",
+                    "SKIPPED": "🔒", "TIMEOUT": "⏱️", "OTHER": "⚠️"}.get(row["result"], "?")
+            lines.append(f"  {row['format']:<8}{row['name']:<58}{icon} {row['result']}")
+    if r.get("bd_structure_matrix"):
+        lines.append("")
+        lines.append("BD Disc Structure Matrix (READ DISC STRUCTURE 0xAD, media type 0x01):")
+        lines.append(f"  {'Format':<8}{'Structure':<58}Result")
+        for row in r["bd_structure_matrix"]:
+            icon = {"SUPPORTED": "✅", "NOT_SUPPORTED": "❌", "NEEDS_MEDIA": "💿",
+                    "SKIPPED": "🔒", "TIMEOUT": "⏱️", "OTHER": "⚠️"}.get(row["result"], "?")
+            lines.append(f"  {row['format']:<8}{row['name']:<58}{icon} {row['result']}")
     s = r["summary"]
     lines.append("")
     lines.append(f"Summary: {s['SUPPORTED']} SUPPORTED / {s['NOT_SUPPORTED']} NOT SUPPORTED / "

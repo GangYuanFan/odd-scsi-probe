@@ -216,16 +216,17 @@ try:
     op.os.close = lambda fd: None
     op._libc.ioctl = ok_ioctl
     r = op.probe_device("/dev/fake", 1, False)
-    check("probe survives mid-probe OSError (72 commands + 10 block types)",
-          len(r["commands"]) == 72 and len(r["block_type_matrix"]) == 10,
-          f"{len(r['commands'])}/{len(r['block_type_matrix'])}")
+    check("probe survives mid-probe OSError (71 commands + 10 block types + 26 DVD + 7 BD structures)",
+          len(r["commands"]) == 71 and len(r["block_type_matrix"]) == 10
+          and len(r["dvd_structure_matrix"]) == 26 and len(r["bd_structure_matrix"]) == 7,
+          f"{len(r['commands'])}/{len(r['block_type_matrix'])}/{len(r['dvd_structure_matrix'])}/{len(r['bd_structure_matrix'])}")
     e46 = next(c for c in r["commands"] if c["opcode"] == "0x46")
     check("0x46 (hit by OSError) -> OTHER with OSError detail",
           e46["result"] == "OTHER" and "OSError" in e46["detail"], str(e46))
     check("0x00 still probed after the failure",
           next(c for c in r["commands"] if c["opcode"] == "0x00")["result"] == "SUPPORTED")
-    check("summary still sums to 82 (result not discarded)",
-          sum(r["summary"].values()) == 82, str(r["summary"]))
+    check("summary still sums to 114 (result not discarded)",
+          sum(r["summary"].values()) == 114, str(r["summary"]))
 finally:
     op.os.open, op.os.close = real_open3, real_close3
     op._libc.ioctl = real_ioctl3
@@ -250,9 +251,9 @@ check("alloc == 0 static (runtime override to media block size)", read10["alloc"
 check("LBA bytes 2-5 == 0", read10["cdb"][2:6] == bytes(4))
 
 print("== command matrix counts / safety flags (v1.2.0 MMC-6 + RSOC) ==")
-check("total 72 opcodes (READ CD moved to block-type matrix)", len(op.CMDS) == 72, str(len(op.CMDS)))
-check("25 SPC / 24 MMC / 23 DANGEROUS",
-      [sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")] == [25, 24, 23],
+check("total 71 opcodes (READ CD and READ DVD STRUCTURE moved to matrices)", len(op.CMDS) == 71, str(len(op.CMDS)))
+check("25 SPC / 23 MMC / 23 DANGEROUS",
+      [sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")] == [25, 23, 23],
       str([sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")]))
 check("RSOC entry present (MAINTENANCE IN SA=0x0C)", any(c.get("rsoc") for c in op.CMDS), "missing")
 rsoc = next((c for c in op.CMDS if c.get("rsoc")), None)
@@ -263,8 +264,8 @@ check("RSOC CDB is 12-byte MAINTENANCE IN 0xA3/0x0C with alloc at bytes 6-7 = 0x
       str(rsoc))
 check("0x35 name covers MMC-2 FLUSH CACHE (ATAPI variant)",
       any("FLUSH CACHE" in c["name"] for c in op.CMDS if c["op"] == 0x35), "0x35 rename missing")
-check("full MMC-6 Table 226/227 coverage (49 opcodes incl. VERIFY 12 0xAF; 0xBE via block-type matrix)",
-      not (op.MMC6_OPCODES - {c["op"] for c in op.CMDS} - {0xBE}))
+check("full MMC-6 Table 226/227 coverage (49 opcodes incl. VERIFY 12 0xAF; 0xBE and 0xAD via matrices)",
+      not (op.MMC6_OPCODES - {c["op"] for c in op.CMDS} - {0xBE, 0xAD}))
 check("every command has a legal dir (in/out/none)",
       all(c.get("dir") in ("in", "out", "none") for c in op.CMDS))
 check("all 'out' commands carry alloc > 0 or runtime override",
@@ -430,10 +431,10 @@ op.scsi_execute = lambda path, cdb, alloc, timeout_s, direction="in", out_data=b
 try:
     calls = []
     res = op.probe_device("/dev/fake", 1, False, progress_cb=lambda d, t: calls.append((d, t)))
-    check("82 monotonic calls (72 opcodes + 10 block types)", len(calls) == 82 and calls[0] == (1, 82)
-          and calls[-1] == (82, 82) and [c[0] for c in calls] == list(range(1, 83)), str(len(calls)))
-    check("summary counts add up to 82 (block types merged)",
-          sum(res["summary"].values()) == 82, str(res["summary"]))
+    check("114 monotonic calls (71 opcodes + 10 block types + 26 DVD + 7 BD structures)", len(calls) == 114 and calls[0] == (1, 114)
+          and calls[-1] == (114, 114) and [c[0] for c in calls] == list(range(1, 115)), str(len(calls)))
+    check("summary counts add up to 114 (matrices merged)",
+          sum(res["summary"].values()) == 114, str(res["summary"]))
     check("RSOC probe populates rsoc_opcodes from SUPPORTED 0xA3",
           isinstance(res.get("rsoc_opcodes"), list), str(type(res.get("rsoc_opcodes"))))
 finally:
@@ -536,20 +537,102 @@ check("block type NEEDS_MEDIA kept",
       op.classify_cd_block_type(0x02, s70(2, 0x3A), "")[0] == "NEEDS_MEDIA")
 check("block type GOOD -> SUPPORTED", op.classify_cd_block_type(0x00, b"", "")[0] == "SUPPORTED")
 
+print("== READ DISC STRUCTURE format matrices (P1-2, MMC-6 §6.22.3) ==")
+check("26 DVD format codes (§6.22.3.2: 00h-11h, 15h, 20h-24h, 30h, 31h)",
+      len(op.DVD_STRUCTURE_FORMATS) == 26, str(len(op.DVD_STRUCTURE_FORMATS)))
+check("DVD format codes exact order",
+      [f for f, _ in op.DVD_STRUCTURE_FORMATS] ==
+      [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C,
+       0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x15, 0x20, 0x21, 0x22, 0x23, 0x24, 0x30, 0x31],
+      str([f for f, _ in op.DVD_STRUCTURE_FORMATS]))
+check("7 BD format codes (§6.22.3.3: 00h, 03h, 08h, 09h, 0Ah, 12h, 30h)",
+      [f for f, _ in op.BD_STRUCTURE_FORMATS] == [0x00, 0x03, 0x08, 0x09, 0x0A, 0x12, 0x30],
+      str([f for f, _ in op.BD_STRUCTURE_FORMATS]))
+check("DVD media type 0x00 (Table 382: 0000b = DVD types)", op.DVD_MEDIA_TYPE == 0x00,
+      f"{op.DVD_MEDIA_TYPE:#04x}")
+check("BD media type 0x01 (Table 382: 0001b = BD; 0x05 is reserved)", op.BD_MEDIA_TYPE == 0x01,
+      f"{op.BD_MEDIA_TYPE:#04x}")
+# Byte-exact golden vectors: [0xAD, 0, media, addr(3), layer=0, fmt, alloc 0x0800, AGID, ctrl]
+check("DVD fmt 0x00 CDB byte-exact (Table 381: byte 6 layer, byte 7 format)",
+      op._read_disc_structure_cdb(0x00, 0x00) == bytes([0xAD, 0, 0x00, 0, 0, 0, 0x00, 0x00, 0x08, 0x00, 0, 0]),
+      op._read_disc_structure_cdb(0x00, 0x00).hex())
+check("DVD fmt 0x05 CDB byte-exact",
+      op._read_disc_structure_cdb(0x00, 0x05) == bytes([0xAD, 0, 0x00, 0, 0, 0, 0x00, 0x05, 0x08, 0x00, 0, 0]),
+      op._read_disc_structure_cdb(0x00, 0x05).hex())
+check("DVD fmt 0x30 CDB byte-exact",
+      op._read_disc_structure_cdb(0x00, 0x30) == bytes([0xAD, 0, 0x00, 0, 0, 0, 0x00, 0x30, 0x08, 0x00, 0, 0]),
+      op._read_disc_structure_cdb(0x00, 0x30).hex())
+check("BD fmt 0x00 CDB byte-exact (media type 0x01)",
+      op._read_disc_structure_cdb(0x01, 0x00) == bytes([0xAD, 0, 0x01, 0, 0, 0, 0x00, 0x00, 0x08, 0x00, 0, 0]),
+      op._read_disc_structure_cdb(0x01, 0x00).hex())
+check("all 33 structure CDBs are 12-byte with alloc 2048 (fmt@byte7)",
+      all(len(op._read_disc_structure_cdb(mt, f)) == 12
+          and op._read_disc_structure_cdb(mt, f)[8:10] == (0x0800).to_bytes(2, "big")
+          and op._read_disc_structure_cdb(mt, f)[7] == f
+          for mt, flist in ((0x00, op.DVD_STRUCTURE_FORMATS), (0x01, op.BD_STRUCTURE_FORMATS))
+          for f, _ in flist))
+
+# mock integration: mixed sense results across the matrices; every row must
+# carry classify() result + sense_hex and feed the summary.
+orig_exec = op.scsi_execute
+def struct_exec(path, cdb, alloc, timeout_s, direction="in", out_data=b""):
+    if cdb[0] != 0xAD:
+        return (0x00, b"", b"\x00" * max(alloc, 1), "")
+    media, fmt = cdb[2], cdb[7]
+    if media == 0x00 and fmt == 0x00:
+        return (0x00, b"", b"\x00" * alloc, "")        # GOOD -> SUPPORTED
+    if media == 0x00 and fmt == 0x05:
+        return (0x02, s72(5, 0x24), b"", "")            # ILLEGAL_REQ 0x24 -> SUPPORTED
+    if media == 0x00 and fmt == 0x30:
+        return (0x02, s72(2, 0x3A), b"", "")            # NOT_READY 0x3A -> NEEDS_MEDIA
+    if media == 0x01 and fmt == 0x00:
+        return (0x02, s72(5, 0x20), b"", "")            # ILLEGAL_REQ 0x20 -> NOT_SUPPORTED
+    return (0x00, b"", b"\x00" * max(alloc, 1), "")
+try:
+    op.scsi_execute = struct_exec
+    r = op.probe_device("/dev/fake", 1, False)
+    dv = {row["format"]: row for row in r["dvd_structure_matrix"]}
+    bm = {row["format"]: row for row in r["bd_structure_matrix"]}
+    check("dvd_structure_matrix 26 rows / bd_structure_matrix 7 rows",
+          len(dv) == 26 and len(bm) == 7, f"{len(dv)}/{len(bm)}")
+    check("DVD fmt 0x00 classified SUPPORTED", dv["0x00"]["result"] == "SUPPORTED", str(dv["0x00"]))
+    check("DVD fmt 0x05 classified SUPPORTED w/ sense_hex (0x24 param rejected)",
+          dv["0x05"]["result"] == "SUPPORTED" and dv["0x05"]["sense_hex"] == s72(5, 0x24).hex(" "),
+          str(dv["0x05"]))
+    check("DVD fmt 0x30 classified NEEDS_MEDIA w/ sense_hex (0x3A)",
+          dv["0x30"]["result"] == "NEEDS_MEDIA" and dv["0x30"]["sense_hex"] == s72(2, 0x3A).hex(" "),
+          str(dv["0x30"]))
+    check("BD fmt 0x00 classified NOT_SUPPORTED w/ sense_hex (0x20)",
+          bm["0x00"]["result"] == "NOT_SUPPORTED" and bm["0x00"]["sense_hex"] == s72(5, 0x20).hex(" "),
+          str(bm["0x00"]))
+    check("BD fmt 0x30 classified SUPPORTED (default GOOD)", bm["0x30"]["result"] == "SUPPORTED", str(bm["0x30"]))
+    check("matrix rows carry format/name/media_type + summary sums to 114",
+          all(row["name"] and row["media_type"] in (0x00, 0x01)
+              for row in r["dvd_structure_matrix"] + r["bd_structure_matrix"])
+          and sum(r["summary"].values()) == 114, str(r["summary"]))
+    check("no 0xAD row in opcode matrix (replaced by structure loops)",
+          all(c["opcode"] != "0xAD" for c in r["commands"]))
+finally:
+    op.scsi_execute = orig_exec
+
 print("== sector size / READ 10 dynamic allocation (PM requirement) ==")
 check("name_block_size(None) == unknown", op.name_block_size(None) == "unknown")
 check("name_block_size(2352) == '2352 (CD raw)'", op.name_block_size(2352) == "2352 (CD raw)")
 check("name_block_size(2048) == '2048'", op.name_block_size(2048) == "2048")
 check("READ 10 static alloc is 0 (runtime override)", read10["alloc"] == 0)
-check("TOTAL_PROBE_STEPS == 82 (72 + 10)", op.TOTAL_PROBE_STEPS == 82, str(op.TOTAL_PROBE_STEPS))
+check("TOTAL_PROBE_STEPS == 114 (71 + 10 + 26 + 7)", op.TOTAL_PROBE_STEPS == 114, str(op.TOTAL_PROBE_STEPS))
 check("0xBE not in CMDS (block-type matrix owns READ CD)",
       all(c["op"] != 0xBE for c in op.CMDS))
-# CDB/alloc consistency: sector-transfer READ commands must allocate at
-# least one full sector; fixed-structure responses (sense, capacities,
-# keys) legitimately use small buffers and are not sector-based.
-for opc, min_alloc in ((0xAD, 2048),):
-    cmd = next(c for c in op.CMDS if c["op"] == opc)
-    check(f"0x{opc:02X} alloc >= {min_alloc} (sector-sized)", cmd["alloc"] >= min_alloc, str(cmd["alloc"]))
+check("0xAD not in CMDS (DVD/BD structure format matrices own READ DISC STRUCTURE)",
+      all(c["op"] != 0xAD for c in op.CMDS))
+# READ DISC STRUCTURE left CMDS for the §6.22.3 format matrices (P1-2): the
+# matrices allocate a full DVD/BD sector (2048) and build 12-byte CDBs with
+# byte 6 = Layer Number (0) and byte 7 = Format (MMC-6 Table 381).
+for mt, fmt in ((0x00, 0x00), (0x00, 0x05), (0x00, 0x30), (0x01, 0x00)):
+    cdb = op._read_disc_structure_cdb(mt, fmt)
+    check(f"0xAD CDB media={mt:#04x} fmt={fmt:#04x}: 12-byte, alloc 2048, fmt@byte7, layer@byte6",
+          len(cdb) == 12 and cdb[2] == mt and cdb[6] == 0x00 and cdb[7] == fmt
+          and cdb[8:10] == (0x0800).to_bytes(2, "big"), cdb.hex())
 check("READ 10 CDB transfer len = 1 block (bytes 7-8)", read10["cdb"][7:9] == bytes([0x00, 0x01]))
 # dynamic alloc: READ CAPACITY block size feeds READ 10 alloc
 orig_exec = op.scsi_execute
