@@ -8,10 +8,11 @@ Scans a SCSI/ATAPI optical device and reports:
   * GET CONFIGURATION feature & profile list (CD / DVD / BD / HD-DVD / DDCD)
   * READ DISC INFORMATION media type
   * READ CAPACITY media sector size (drives READ 10 buffer sizing)
-  * Per-opcode support matrix for 69 SCSI commands: full MMC-6 Table 226/227
-    coverage (48 opcodes; READ CD 0xBE represented by the Table 352 Expected
-    Sector Type matrix, 10 block types) + 21 legacy/extra commands (SPC-3
-    extras / MMC Annex E / MMC-4 gap closure).
+  * Per-opcode support matrix for 72 SCSI commands: MMC-6 Table 7 optical-disc
+    probe coverage (mandatory/optional/legacy + SPC-3 inheritance; 49 MMC-6
+    opcodes incl. VERIFY 12 0xAF — READ CD 0xBE represented by the Table 352
+    Expected Sector Type matrix, 10 block types) + 23 legacy/extra commands
+    (SPC-3 extras / MMC Annex E / MMC-4 gap closure).
   * Per-command data direction (dir: in/out/none) — write-class commands are
     sent with SG_DXFER_TO_DEV / SCSI_IOCTL_DATA_OUT so DOUT opcodes are
     detected correctly.
@@ -65,7 +66,7 @@ import struct
 import sys
 import time
 
-__version__ = "1.3.1"  # v1.3.1: hard firmware-flash protection (WRITE BUFFER mode != 0x00 never sent, anti-brick)
+__version__ = "1.4.0"  # v1.4.0: P0 spec fixes — RESERVE 10 / RELEASE 6/10 / VERIFY 12 + 0x56 relabel (MMC-6 Table 7 verified)
 
 # ---------------------------------------------------------------------------
 # SCSI constants
@@ -175,9 +176,11 @@ ASC_NAMES = {
 }
 
 # ---------------------------------------------------------------------------
-# Command matrix: 69 opcodes = full MMC-6 Table 226/227 coverage (48 opcodes;
-# READ CD 0xBE is represented by the Table 352 block-type matrix below) + 21
-# legacy/extra commands (SPC-3 variants / MMC Annex E / MMC-4 gap closure)
+# Command matrix: 72 opcodes = MMC-6 Table 7 optical-disc probe coverage
+# (mandatory/optional/legacy + SPC-3 inheritance; 49 MMC-6 opcodes incl.
+# VERIFY 12 0xAF — READ CD 0xBE is represented by the Table 352 block-type
+# matrix below) + 23 legacy/extra commands (SPC-3 variants / MMC Annex E /
+# MMC-4 gap closure)
 # kept for completeness and flagged legacy. CDB templates per MMC-6 rev 2g
 # (T10/1836-D), cross-checked against SPC-3 for the security/read-media-serial
 # opcodes.
@@ -193,7 +196,7 @@ MMC6_OPCODES = frozenset((
     0x2B, 0x2E, 0x2F, 0x35, 0x3B, 0x3C, 0x43, 0x46, 0x4A, 0x51,
     0x52, 0x53, 0x54, 0x55, 0x58, 0x5A, 0x5B, 0x5C, 0x5D, 0xA0,
     0xA1, 0xA2, 0xA3, 0xA4, 0xA6, 0xA7, 0xA8, 0xAA, 0xAB, 0xAC,
-    0xAD, 0xB5, 0xB6, 0xB9, 0xBB, 0xBD, 0xBE, 0xBF,
+    0xAD, 0xAF, 0xB5, 0xB6, 0xB9, 0xBB, 0xBD, 0xBE, 0xBF,
 ))
 
 CMDS = [
@@ -208,6 +211,7 @@ CMDS = [
     {"op": 0x28, "name": "READ 10", "cat": "SPC", "cdb": bytes([0x28, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0]), "alloc": 0, "dir": "in"},  # alloc overridden at runtime: media block size (READ CAPACITY) or 2352 fallback
     {"op": 0x2B, "name": "SEEK 10", "cat": "SPC", "cdb": bytes([0x2B, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none"},
     {"op": 0x2F, "name": "VERIFY 10", "cat": "SPC", "cdb": bytes([0x2F, 0, 0, 0, 0, 0, 0, 0x00, 0, 0]), "alloc": 0, "dir": "none"},  # BYTCHK=0,len=0
+    {"op": 0xAF, "name": "VERIFY 12", "cat": "SPC", "cdb": bytes([0xAF, 0, 0, 0, 0, 0, 0, 0x00, 0, 0, 0, 0]), "alloc": 0, "dir": "none"},  # BYTCHK=0, verification length=0 -> verifies nothing (safe); MMC-6 Table 7: VERIFY = 2Fh/AFh
     {"op": 0x35, "name": "SYNCHRONIZE CACHE / FLUSH CACHE", "cat": "SPC", "cdb": bytes([0x35, 0, 0, 0, 0, 0, 0, 0x00, 0, 0]), "alloc": 0, "dir": "none"},  # range 0 = no-op; MMC-2 FLUSH CACHE = ATAPI 12-byte variant of same opcode
     {"op": 0x3C, "name": "READ BUFFER", "cat": "SPC", "cdb": bytes([0x3C, 0x00, 0x00, 0, 0, 0, 0x00, 0x04, 0, 0]), "alloc": 4, "dir": "in"},  # mode 0 capacity header
     {"op": 0x5A, "name": "MODE SENSE 10", "cat": "SPC", "cdb": bytes([0x5A, 0, 0x3F, 0, 0, 0, 0, 0, 0x10, 0x00]), "alloc": 4096, "dir": "in"},  # P1-8: alloc 4096 (Windows SCSI_PASS_THROUGH 64KB cap; MMC allows truncated responses),
@@ -216,6 +220,7 @@ CMDS = [
     # ---- MMC-4 / SPC legacy additions (v1.2.1) ----
     {"op": 0x01, "name": "REZERO UNIT", "cat": "SPC", "cdb": bytes([0x01, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "legacy": True},  # obsolete SPC
     {"op": 0x16, "name": "RESERVE 6", "cat": "SPC", "cdb": bytes([0x16, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "legacy": True},  # obsolete SPC
+    {"op": 0x17, "name": "RELEASE 6", "cat": "SPC", "cdb": bytes([0x17, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "legacy": True},  # MMC-6 Table 7: RELEASE = 17h,57h
     {"op": 0x34, "name": "PREFETCH 10", "cat": "SPC", "cdb": bytes([0x34, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0]), "alloc": 0, "dir": "none"},  # LBA=0 len=1
     {"op": 0x36, "name": "LOCK/UNLOCK CACHE", "cat": "SPC", "cdb": bytes([0x36, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none"},
     {"op": 0x4C, "name": "LOG SENSE", "cat": "SPC", "cdb": bytes([0x4C, 0, 0x00, 0, 0, 0, 0, 0, 0xFF, 0xFF]), "alloc": 4096, "dir": "in"},
@@ -256,7 +261,8 @@ CMDS = [
     {"op": 0x53, "name": "RESERVE TRACK", "cat": "DANGEROUS", "cdb": bytes([0x53, 0x01, 0, 0, 0x00, 0x01, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True},  # ARSV=1, track 1
     {"op": 0x54, "name": "SEND OPC INFORMATION", "cat": "DANGEROUS", "cdb": bytes([0x54, 0x01, 0, 0, 0, 0, 0, 0x00, 0x00, 0]), "alloc": 0, "dir": "none", "dangerous": True},  # DoOpc=1
     {"op": 0x55, "name": "MODE SELECT 10", "cat": "DANGEROUS", "cdb": bytes([0x55, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0]), "alloc": 0, "dir": "out", "dangerous": True},  # paramlen=0
-    {"op": 0x56, "name": "CLOSE TRACK/SESSION (old)", "cat": "DANGEROUS", "cdb": bytes([0x56, 0x01, 0x02, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True, "legacy": True, "danger_note": "closes session (MMC-2 legacy opcode)"},
+    {"op": 0x56, "name": "RESERVE 10", "cat": "SPC", "cdb": bytes([0x56, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "legacy": True},  # MMC-6 Table 7: RESERVE = 16h,56h (舊標 CLOSE TRACK/SESSION (old) 為誤標；真正的 CLOSE TRACK/SESSION = 5Bh)
+    {"op": 0x57, "name": "RELEASE 10", "cat": "SPC", "cdb": bytes([0x57, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "legacy": True},  # MMC-6 Table 7: RELEASE = 17h,57h
     {"op": 0x58, "name": "REPAIR TRACK", "cat": "DANGEROUS", "cdb": bytes([0x58, 0x01, 0, 0, 0x00, 0x01, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True},  # Immed=1, track 1
     {"op": 0x5B, "name": "CLOSE TRACK/SESSION", "cat": "DANGEROUS", "cdb": bytes([0x5B, 0x01, 0x02, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True, "danger_note": "closes session / finalizes disc"},
     {"op": 0x5D, "name": "SEND CUE SHEET", "cat": "DANGEROUS", "cdb": bytes([0x5D, 0, 0, 0, 0, 0, 0x00, 0x04, 0, 0]), "alloc": 4, "dir": "out", "dangerous": True},  # cue sheet size 4
@@ -275,7 +281,7 @@ CMDS = [
     {"op": 0xBA, "name": "SCAN", "cat": "DANGEROUS", "cdb": bytes([0xBA, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True, "legacy": True},  # 12-byte
 ]
 
-# Total probe steps = 69 opcodes + 10 READ CD Table 352 block types (79).
+# Total probe steps = 72 opcodes + 10 READ CD Table 352 block types (82).
 # progress_cb totals and the GUI progress bar must use this, not len(CMDS).
 TOTAL_PROBE_STEPS = len(CMDS) + len(CD_BLOCK_TYPE_CODES)
 
@@ -817,7 +823,7 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
 
     # 5) READ CD — probe every Table 352 matrix row. Each
     #    type is one matrix row (alloc = that type's block size); results are
-    #    merged into the summary and drive the progress bar (79 total steps).
+    #    merged into the summary and drive the progress bar (82 total steps).
     block_type_matrix = []
     for code in CD_BLOCK_TYPE_CODES:
         bt = CD_BLOCK_TYPES[code]

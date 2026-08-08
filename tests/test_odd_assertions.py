@@ -216,16 +216,16 @@ try:
     op.os.close = lambda fd: None
     op._libc.ioctl = ok_ioctl
     r = op.probe_device("/dev/fake", 1, False)
-    check("probe survives mid-probe OSError (69 commands + 10 block types)",
-          len(r["commands"]) == 69 and len(r["block_type_matrix"]) == 10,
+    check("probe survives mid-probe OSError (72 commands + 10 block types)",
+          len(r["commands"]) == 72 and len(r["block_type_matrix"]) == 10,
           f"{len(r['commands'])}/{len(r['block_type_matrix'])}")
     e46 = next(c for c in r["commands"] if c["opcode"] == "0x46")
     check("0x46 (hit by OSError) -> OTHER with OSError detail",
           e46["result"] == "OTHER" and "OSError" in e46["detail"], str(e46))
     check("0x00 still probed after the failure",
           next(c for c in r["commands"] if c["opcode"] == "0x00")["result"] == "SUPPORTED")
-    check("summary still sums to 79 (result not discarded)",
-          sum(r["summary"].values()) == 79, str(r["summary"]))
+    check("summary still sums to 82 (result not discarded)",
+          sum(r["summary"].values()) == 82, str(r["summary"]))
 finally:
     op.os.open, op.os.close = real_open3, real_close3
     op._libc.ioctl = real_ioctl3
@@ -250,9 +250,9 @@ check("alloc == 0 static (runtime override to media block size)", read10["alloc"
 check("LBA bytes 2-5 == 0", read10["cdb"][2:6] == bytes(4))
 
 print("== command matrix counts / safety flags (v1.2.0 MMC-6 + RSOC) ==")
-check("total 69 opcodes (READ CD moved to block-type matrix)", len(op.CMDS) == 69, str(len(op.CMDS)))
-check("21 SPC / 24 MMC / 24 DANGEROUS",
-      [sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")] == [21, 24, 24],
+check("total 72 opcodes (READ CD moved to block-type matrix)", len(op.CMDS) == 72, str(len(op.CMDS)))
+check("25 SPC / 24 MMC / 23 DANGEROUS",
+      [sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")] == [25, 24, 23],
       str([sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")]))
 check("RSOC entry present (MAINTENANCE IN SA=0x0C)", any(c.get("rsoc") for c in op.CMDS), "missing")
 rsoc = next((c for c in op.CMDS if c.get("rsoc")), None)
@@ -263,7 +263,7 @@ check("RSOC CDB is 12-byte MAINTENANCE IN 0xA3/0x0C with alloc at bytes 6-7 = 0x
       str(rsoc))
 check("0x35 name covers MMC-2 FLUSH CACHE (ATAPI variant)",
       any("FLUSH CACHE" in c["name"] for c in op.CMDS if c["op"] == 0x35), "0x35 rename missing")
-check("full MMC-6 Table 226/227 coverage (48 opcodes, 0xBE via block-type matrix)",
+check("full MMC-6 Table 226/227 coverage (49 opcodes incl. VERIFY 12 0xAF; 0xBE via block-type matrix)",
       not (op.MMC6_OPCODES - {c["op"] for c in op.CMDS} - {0xBE}))
 check("every command has a legal dir (in/out/none)",
       all(c.get("dir") in ("in", "out", "none") for c in op.CMDS))
@@ -303,12 +303,35 @@ check("0xAB READ MEDIA SERIAL alloc length bytes 9-10 = 0x0080 (P1-5, was 0x8000
       rms["cdb"].hex())
 check("16-byte CDBs (A2/A3/B5/A4) have len==16",
       all(len(next(c for c in op.CMDS if c["op"] == opc)["cdb"]) == 16 for opc in (0xA2, 0xA4, 0xB5)))
-for opc in (0xA1, 0x5B, 0x56, 0x04, 0xA6, 0x47, 0x48):
+for opc in (0xA1, 0x5B, 0x04, 0xA6, 0x47, 0x48):
     c = next(c for c in op.CMDS if c["op"] == opc)
     check(f"0x{opc:02X} flagged dangerous (sent for real in --dangerous)", bool(c.get("dangerous")), str(c))
 danger = [c for c in op.CMDS if c.get("dangerous")]
-check("27 dangerous entries (incl. PLAY AUDIO x3 — full compat per product owner)",
-      len(danger) == 27, str(len(danger)))
+check("26 dangerous entries (incl. PLAY AUDIO x3 — full compat per product owner; 0x56 RESERVE 10 no longer dangerous)",
+      len(danger) == 26, str(len(danger)))
+
+print("== P0 spec fix golden vectors (MMC-6 Table 7: RESERVE=16h/56h, RELEASE=17h/57h, VERIFY=2Fh/AFh) ==")
+res6 = next(c for c in op.CMDS if c["op"] == 0x16)
+rel6 = next(c for c in op.CMDS if c["op"] == 0x17)
+res10 = next(c for c in op.CMDS if c["op"] == 0x56)
+rel10 = next(c for c in op.CMDS if c["op"] == 0x57)
+ver10 = next(c for c in op.CMDS if c["op"] == 0x2F)
+ver12 = next(c for c in op.CMDS if c["op"] == 0xAF)
+check("0x17 RELEASE 6 CDB byte-exact (Table 7 RELEASE=17h,57h)",
+      rel6["cdb"] == bytes([0x17, 0, 0, 0, 0, 0]) and rel6["cat"] == "SPC" and rel6.get("legacy") and not rel6.get("dangerous"),
+      rel6["cdb"].hex())
+check("0x56 RESERVE 10 CDB byte-exact + not dangerous (Table 7 RESERVE=16h,56h; old CLOSE TRACK/SESSION label was wrong)",
+      res10["cdb"] == bytes([0x56, 0, 0, 0, 0, 0, 0, 0, 0, 0]) and res10["cat"] == "SPC" and res10.get("legacy")
+      and not res10.get("dangerous") and res10["alloc"] == 0 and res10["dir"] == "none",
+      f'{res10["cdb"].hex()} dangerous={res10.get("dangerous")}')
+check("0x57 RELEASE 10 CDB byte-exact (Table 7 RELEASE=17h,57h)",
+      rel10["cdb"] == bytes([0x57, 0, 0, 0, 0, 0, 0, 0, 0, 0]) and rel10["cat"] == "SPC" and rel10.get("legacy") and not rel10.get("dangerous"),
+      rel10["cdb"].hex())
+check("0xAF VERIFY 12 CDB 12-byte byte-exact (BYTCHK=0, verification length=0 -> verifies nothing)",
+      ver12["cdb"] == bytes([0xAF, 0, 0, 0, 0, 0, 0, 0x00, 0, 0, 0, 0]) and ver12["alloc"] == 0
+      and ver12["dir"] == "none" and not ver12.get("dangerous"),
+      f'{ver12["cdb"].hex()} alloc={ver12["alloc"]} dir={ver12["dir"]}')
+check("0xAF in MMC6_OPCODES (VERIFY 2Fh/AFh both MMC-6 Table 7)", 0xAF in op.MMC6_OPCODES, "missing")
 check("no 'unsafe' flag remains (owner removed never-send policy)",
       all(not c.get("unsafe") for c in op.CMDS))
 wb = next(c for c in op.CMDS if c["op"] == 0x3B)
@@ -407,10 +430,10 @@ op.scsi_execute = lambda path, cdb, alloc, timeout_s, direction="in", out_data=b
 try:
     calls = []
     res = op.probe_device("/dev/fake", 1, False, progress_cb=lambda d, t: calls.append((d, t)))
-    check("79 monotonic calls (69 opcodes + 10 block types)", len(calls) == 79 and calls[0] == (1, 79)
-          and calls[-1] == (79, 79) and [c[0] for c in calls] == list(range(1, 80)), str(len(calls)))
-    check("summary counts add up to 79 (block types merged)",
-          sum(res["summary"].values()) == 79, str(res["summary"]))
+    check("82 monotonic calls (72 opcodes + 10 block types)", len(calls) == 82 and calls[0] == (1, 82)
+          and calls[-1] == (82, 82) and [c[0] for c in calls] == list(range(1, 83)), str(len(calls)))
+    check("summary counts add up to 82 (block types merged)",
+          sum(res["summary"].values()) == 82, str(res["summary"]))
     check("RSOC probe populates rsoc_opcodes from SUPPORTED 0xA3",
           isinstance(res.get("rsoc_opcodes"), list), str(type(res.get("rsoc_opcodes"))))
 finally:
@@ -518,7 +541,7 @@ check("name_block_size(None) == unknown", op.name_block_size(None) == "unknown")
 check("name_block_size(2352) == '2352 (CD raw)'", op.name_block_size(2352) == "2352 (CD raw)")
 check("name_block_size(2048) == '2048'", op.name_block_size(2048) == "2048")
 check("READ 10 static alloc is 0 (runtime override)", read10["alloc"] == 0)
-check("TOTAL_PROBE_STEPS == 79 (69 + 10)", op.TOTAL_PROBE_STEPS == 79, str(op.TOTAL_PROBE_STEPS))
+check("TOTAL_PROBE_STEPS == 82 (72 + 10)", op.TOTAL_PROBE_STEPS == 82, str(op.TOTAL_PROBE_STEPS))
 check("0xBE not in CMDS (block-type matrix owns READ CD)",
       all(c["op"] != 0xBE for c in op.CMDS))
 # CDB/alloc consistency: sector-transfer READ commands must allocate at
