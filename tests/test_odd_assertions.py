@@ -710,5 +710,77 @@ try:
 finally:
     op.scsi_execute = orig_exec2
 
+print("== READ CD MSF (0xB9) media-aware TOC-derived MSF (P1-1) ==")
+# LBA -> MSF golden vectors (frame 0 == LBA -150; LBA 0 == MSF 0:2:0).
+check("_lba_to_msf(0) == (0,2,0)", op._lba_to_msf(0) == (0, 2, 0), str(op._lba_to_msf(0)))
+check("_lba_to_msf(150) == (0,4,0)", op._lba_to_msf(150) == (0, 4, 0), str(op._lba_to_msf(150)))
+check("_lba_to_msf(4500) == (1,2,0)", op._lba_to_msf(4500) == (1, 2, 0), str(op._lba_to_msf(4500)))
+# Format 0 TOC golden vector: first track 1, start LBA 0x00A0 (=160) -> MSF 0:4:10.
+# 10-byte descriptor (MMC-6 Table 334): [adr/ctl, track, reserved(4), start LBA(4)],
+# dlen = 0x000C = first/last(2) + one descriptor(10).
+fake_toc = b"\x00\x0c" + b"\x01\x01" + bytes([0x01, 0x01, 0, 0, 0, 0]) + (0x00A0).to_bytes(4, "big")
+toc_cdb = bytes([0x43, 0, 0, 0x00, 0, 0x00, 0x10, 0x00, 0])
+dyn_b9 = bytes([0xB9, 0x00, 0, 4, 10, 0, 5, 10, 0x00, 0x10, 0x00, 0])
+fix_b9 = bytes([0xB9, 0x00, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x10, 0x00, 0])
+
+orig_exec_p11 = op.scsi_execute
+try:
+    calls = []
+    def toc_ok_exec(path, cdb, alloc, timeout_s, direction="in", out_data=b""):
+        calls.append((bytes(cdb), alloc))
+        if cdb[0] == 0x43:
+            return (0x00, b"", fake_toc, "")
+        if cdb[0] == 0x25:
+            return (0x00, b"", (0).to_bytes(4, "big") + (2048).to_bytes(4, "big"), "")
+        return (0x00, b"", b"\x00" * max(alloc, 1), "")
+    op.scsi_execute = toc_ok_exec
+    msf, tn = op._read_toc_first_track_msf("/dev/fake", 1)
+    check("TOC parse: LBA 0x00A0 -> MSF (0,4,10), track 1",
+          msf == (0, 4, 10) and tn == 1, f"msf={msf} track={tn}")
+    check("TOC parse: READ TOC CDB byte-exact, alloc 4096",
+          calls[0][0] == toc_cdb and calls[0][1] == 4096,
+          calls[0][0].hex() if calls else "no call")
+    calls.clear()
+    r = op.probe_device("/dev/fake", 1, False)
+    b9_call = next(c for c in calls if c[0][0] == 0xB9)
+    b9_entry = next(c for c in r["commands"] if c["opcode"] == "0xB9")
+    check("B9 with TOC: dynamic CDB byte-exact (0:4:10 -> 0:5:10)",
+          b9_call[0] == dyn_b9, b9_call[0].hex())
+    check("B9 with TOC: alloc stays 2352", b9_call[1] == 2352, str(b9_call[1]))
+    check("B9 with TOC: detail carries TOC track marker",
+          "TOC track 1 MSF 0:4:10" in b9_entry["detail"], b9_entry["detail"])
+    calls.clear()
+    def toc_fail_exec(path, cdb, alloc, timeout_s, direction="in", out_data=b""):
+        calls.append((bytes(cdb), alloc))
+        if cdb[0] == 0x43:
+            return (0x02, s70(2, 0x3A), b"", "")  # MEDIUM NOT PRESENT -> no TOC
+        if cdb[0] == 0x25:
+            return (0x00, b"", (0).to_bytes(4, "big") + (2048).to_bytes(4, "big"), "")
+        return (0x00, b"", b"\x00" * max(alloc, 1), "")
+    op.scsi_execute = toc_fail_exec
+    r = op.probe_device("/dev/fake", 1, False)
+    b9_call = next(c for c in calls if c[0][0] == 0xB9)
+    b9_entry = next(c for c in r["commands"] if c["opcode"] == "0xB9")
+    check("B9 without TOC: fallback CDB byte-exact (fixed MSF)",
+          b9_call[0] == fix_b9, b9_call[0].hex())
+    check("B9 without TOC: detail carries no-TOC marker",
+          "no TOC, fixed MSF" in b9_entry["detail"], b9_entry["detail"])
+    calls.clear()
+    def toc_garbage_exec(path, cdb, alloc, timeout_s, direction="in", out_data=b""):
+        calls.append((bytes(cdb), alloc))
+        if cdb[0] == 0x43:
+            return (0x00, b"", b"\x00" * 4096, "")  # unparseable (first track 0)
+        if cdb[0] == 0x25:
+            return (0x00, b"", (0).to_bytes(4, "big") + (2048).to_bytes(4, "big"), "")
+        return (0x00, b"", b"\x00" * max(alloc, 1), "")
+    op.scsi_execute = toc_garbage_exec
+    r = op.probe_device("/dev/fake", 1, False)
+    b9_call = next(c for c in calls if c[0][0] == 0xB9)
+    check("B9 garbage TOC: falls back to fixed CDB", b9_call[0] == fix_b9, b9_call[0].hex())
+    check("B9 matrix entry still exactly one per probe",
+          len([c for c in r["commands"] if c["opcode"] == "0xB9"]) == 1)
+finally:
+    op.scsi_execute = orig_exec_p11
+
 print(f"\nRESULT: {passed} passed / {failed} failed")
 sys.exit(1 if failed else 0)

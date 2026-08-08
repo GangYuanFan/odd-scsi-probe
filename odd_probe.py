@@ -604,6 +604,36 @@ def _read_cd_cdb(code):
     return bytes([0xBE, (bt["est"] & 0x3F) << 2, 0, 0, 0, 0,
                   0x00, 0x00, 0x01, bt["flags"], bt["subch"], 0])
 
+
+def _lba_to_msf(lba):
+    """LBA -> CD MSF (minutes, seconds, frames). Frame 0 sits 2 s (150
+    frames) into the lead-in, so LBA 0 == MSF 0:2:0; 1 min = 4500 frames."""
+    total = lba + 150
+    m = total // 4500
+    s = (total % 4500) // 75
+    f = total % 75
+    return (m, s, f)
+
+
+def _read_toc_first_track_msf(dev, timeout_s):
+    """READ TOC (0x43, format 0) -> ((m, s, f) of the first track's start
+    LBA, first track number), or None on any failure (no TOC / no media /
+    unparseable data). Format 0 track descriptors start at response byte 4,
+    one per 10 bytes (MMC-6 Table 334): [0]=ADR/Control, [1]=track number,
+    [2..5]=reserved, [6..9]=start address (LBA, big-endian)."""
+    status, sense, data, err = _scsi_execute_rescued(
+        dev, bytes([0x43, 0, 0, 0x00, 0, 0x00, 0x10, 0x00, 0]), 4096, timeout_s)
+    if err or status != 0x00 or len(data) < 14:
+        return None
+    first, last = data[2], data[3]
+    if first == 0 or last == 0 or first > last:
+        return None
+    lba = int.from_bytes(data[10:14], "big")
+    msf = _lba_to_msf(lba)
+    if msf[0] > 255:  # garbage TOC: MSF must fit in the CDB's single bytes
+        return None
+    return (msf, first)
+
 # ---------------------------------------------------------------------------
 # Payload parsers
 # ---------------------------------------------------------------------------
@@ -892,7 +922,25 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
         else:
             alloc = cmd["alloc"]
             out_data = b""
-            if op in (0x28, 0xA8):
+            cdb = cmd["cdb"]
+            detail_suffix = ""
+            if op == 0xB9:
+                # READ CD MSF (P1-1): the static 0:0:0 -> 0:0:1 range sits in
+                # the lead-in, where real drives answer MEDIUM ERROR — a false
+                # "not supported". Derive a legal MSF from READ TOC's first
+                # track start LBA instead; without TOC (no media) keep the
+                # fixed CDB unchanged.
+                toc = _read_toc_first_track_msf(dev, timeout_s)
+                if toc is not None:
+                    (m, s, f), track_no = toc
+                    start_lba = m * 4500 + s * 75 + f - 150  # MSF -> LBA
+                    m2, s2, f2 = _lba_to_msf(start_lba + 75)  # +1 s of frames
+                    cdb = bytes([0xB9, 0x00, m, s, f, m2, s2, f2, 0x00, 0x10, 0x00, 0])
+                    detail_suffix = f" (TOC track {track_no} MSF {m}:{s}:{f})"
+                else:
+                    cdb = bytes([0xB9, 0x00, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x10, 0x00, 0])
+                    detail_suffix = " (no TOC, fixed MSF)"
+            elif op in (0x28, 0xA8):
                 # READ 10 / READ 12: exactly 1 block — allocate the media's real
                 # sector size (READ CAPACITY) or the CD raw maximum when unknown.
                 alloc = media_block_size or MAX_SECTOR_SIZE
@@ -908,10 +956,12 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
                 # WRITE BUFFER mode 0x00 (combined header+data): 4-byte header
                 # (buffer id 0, offset 0) + 4 data bytes. Firmware modes are NEVER used.
                 out_data = bytes([0x00, 0x00, 0x00, 0x00, 0xAA, 0xAA, 0xAA, 0xAA])
-            status, sense, data, err = _scsi_execute_rescued(dev, cmd["cdb"], alloc, timeout_s,
+            status, sense, data, err = _scsi_execute_rescued(dev, cdb, alloc, timeout_s,
                                                              direction=cmd.get("dir", "in"),
                                                              out_data=out_data)
             label, detail = classify(status, sense, err)
+            if detail_suffix:
+                detail = f"{detail}{detail_suffix}"
             if cmd.get("rsoc") and label == "SUPPORTED" and data:
                 result["rsoc_opcodes"] = parse_rsoc(data)
             entry["sense_hex"] = sense.hex(" ") if sense else ""
