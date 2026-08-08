@@ -234,7 +234,7 @@ CMDS = [
     {"op": 0x15, "name": "MODE SELECT 6", "cat": "DANGEROUS", "cdb": bytes([0x15, 0, 0x00, 0x00, 0x00, 0]), "alloc": 0, "dir": "out", "dangerous": True},  # paramlen=0
     {"op": 0x2A, "name": "WRITE 10", "cat": "DANGEROUS", "cdb": bytes([0x2A, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0]), "alloc": 0, "dir": "out", "dangerous": True, "danger_note": "writes 1 block at LBA 0"},  # alloc runtime (block size)
     {"op": 0x2E, "name": "WRITE AND VERIFY 10", "cat": "DANGEROUS", "cdb": bytes([0x2E, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0]), "alloc": 0, "dir": "out", "dangerous": True, "danger_note": "writes + verifies 1 block at LBA 0"},
-    {"op": 0x3B, "name": "WRITE BUFFER", "cat": "DANGEROUS", "cdb": bytes([0x3B, 0x00, 0x00, 0, 0, 0, 0x00, 0x00, 0, 0]), "alloc": 8, "dir": "out", "dangerous": True, "danger_note": "mode 0x00 device buffer only — firmware modes NEVER used"},
+    {"op": 0x3B, "name": "WRITE BUFFER", "cat": "DANGEROUS", "cdb": bytes([0x3B, 0x00, 0x00, 0, 0, 0, 0x00, 0x00, 0x08, 0]), "alloc": 8, "dir": "out", "dangerous": True, "danger_note": "mode 0x00 device buffer only — firmware modes NEVER used"},  # param list length bytes 6-8 = 0x000008 (4B header + 4B data, P1-4),
     {"op": 0x53, "name": "RESERVE TRACK", "cat": "DANGEROUS", "cdb": bytes([0x53, 0x01, 0, 0, 0x00, 0x01, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True},  # ARSV=1, track 1
     {"op": 0x54, "name": "SEND OPC INFORMATION", "cat": "DANGEROUS", "cdb": bytes([0x54, 0x01, 0, 0, 0, 0, 0, 0x00, 0x00, 0]), "alloc": 0, "dir": "none", "dangerous": True},  # DoOpc=1
     {"op": 0x55, "name": "MODE SELECT 10", "cat": "DANGEROUS", "cdb": bytes([0x55, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0]), "alloc": 0, "dir": "out", "dangerous": True},  # paramlen=0
