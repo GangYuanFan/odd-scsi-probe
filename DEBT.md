@@ -2,6 +2,7 @@
 
 | Date | Module/Line | Shortcut Taken | Reason/Blocker | Upgrade Path (How to fix) | Priority |
 | :--- | :--- | :--- | :--- | :--- | :--- |
+| 2026-08-08 | `odd_probe.py` `CMDS`（0x56/0x17/0x57/0xAF） | ~~0x56 誤標 CLOSE TRACK/SESSION (old) 且列 DANGEROUS；RELEASE 6/10、VERIFY 12 缺漏~~（已解，v1.4.0） | ChatGPT review + MMC-6 r2g 原廠規格交叉驗證：Table 7 明文 VERIFY=2Fh/AFh、RELEASE=17h/57h、RESERVE=16h/56h；0x56 實為 RESERVE 10（SPC），舊標為誤標 | v1.4.0：0x56 改標 RESERVE 10 並移出 DANGEROUS、新增 0x17/0x57 RELEASE 6/10、0xAF VERIFY 12（BYTCHK=0 安全）、0xAF 入 MMC6_OPCODES；golden vector 測試覆蓋（ChatGPT review 2026-08-08） | Low |
 | 2026-08-07 | `odd_probe.py` `scsi_execute()` (posix) | sense buffer 用 32B（任務書寫 8B） | 判定邏輯需要 ASC/ASCQ（固定 sense offset 12/13），8B 裝不下 | 無需升級：屬必要偏離，已於 README 註明 | Low |
 | 2026-08-07 | `odd_probe.py` Windows backend | ~~已補 `CreateFileW`/`DeviceIoControl` 的 `restype`/`argtypes`（HANDLE/BOOL，64-bit 不截斷）並程式化驗證 `SCSI_PASS_THROUGH` layout~~（已解） | 2026-08-07 Windows 真機實測（Python 3.14.3）：`list` 32 候選裝置全部優雅 unavailable、`--device \\.\CdRom0` 55 項矩陣完整執行不 crash、exe 啟動正常。**但該機無實體光碟機**，INQUIRY 成功路徑（含 64-bit HANDLE 實機驗證）仍未實測 | 需有實體 ODD 的 Windows 機器以光碟機實測 `list` / `--device \\.\CdRom0` | High |
 | 2026-08-07 | `odd_probe.py` `_configure_windows_ctypes()` | ~~`use_last_error` 未啟用 → 錯誤訊息恆顯示 `CreateFileW failed (0)`~~（已解） | 真機實測發現：`ctypes.windll.kernel32` 函式物件建立後再設 `use_last_error=True` 是 no-op，`get_last_error()` 回 stale 0 | 改用 `ctypes.WinDLL("kernel32", use_last_error=True)` 專用實例（已實作），錯誤碼現為真實值（如 2 = ERROR_FILE_NOT_FOUND） | Low |

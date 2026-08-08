@@ -11,7 +11,7 @@ USB ODD（光碟機）SCSI command 支援度檢測工具 — 支援 CD / DVD / B
   - **INQUIRY**：Vendor / Product / Revision / Peripheral Device Type / Serial Number (EVPD 0x80)
   - **GET CONFIGURATION**：Current Profile、全部支援 Profile（含 current 標記）、Feature List（49 個內建對照）
   - **READ DISC INFORMATION**：目前碟片 Disc Type（與 current profile 交叉比對）
-  - **指令矩陣**：69 個 opcode（MMC-6 Table 226/227 完整 48 指令 + legacy 指令 + MMC-4 gap closure 10 指令）逐指令判定支援度，外加 READ CD Table 600 Data Block Type 支援矩陣（10 種 block type）
+  - **指令矩陣**：72 個 opcode（MMC-6 Table 7 光碟指令探測覆蓋：mandatory/optional/legacy + SPC 繼承，含 MMC-4 gap closure 10 指令）逐指令判定支援度，外加 READ CD Table 600 Data Block Type 支援矩陣（10 種 block type）
 - 人類可讀輸出 + `--json` 機器可讀輸出（通過 `python3 -m json.tool` 驗證）
 - **雙模式**：預設 safe 模式（破壞性指令 SKIP）／ `--dangerous` 完整相容性測試模式（所有指令真實發送，見下方說明）
 
@@ -77,7 +77,7 @@ pythonw odd_probe_gui.py
 
 1. **掃描裝置** → 下拉選單列出候選裝置（Linux: `/dev/sg*` `/dev/sr*`；Windows: `\\.\CdRom*`），選取後「開始檢測」才會啟用
 2. 可選調整：`--dangerous` 完整相容性模式勾選（預設關閉；勾選時彈出確認警告，所有指令包含 BLANK / FORMAT / CLOSE TRACK / 彈 tray 皆真實發送）、Timeout（1-30 秒，預設 5）
-3. **開始檢測** → 背景執行緒執行完整探測，進度列顯示 `x/79`（69 個 opcode + 10 種 READ CD block type），UI 不凍結
+3. **開始檢測** → 背景執行緒執行完整探測，進度列顯示 `x/82`（72 個 opcode + 10 種 READ CD block type），UI 不凍結
 4. 結果分四頁顯示：
    - **裝置資訊**：Vendor / Product / Revision / Peripheral Type / Serial / Current Profile / Media Detected
    - **支援格式**：Profile 清單（current 標 `[*]`）+ Feature 清單
@@ -200,15 +200,15 @@ repo 在 WSL 檔案系統時，直接 `cmd.exe /c build.bat` 會遇到兩個坑�
 | 14 | — | Reserved | — |
 | 15 | — | NA Vendor Specific | — |
 
-工具對 code 0/1/2/3/8/9/10/11/12/13 各探測一次（READ CD 0xBE 因此不再出現在 opcode 矩陣中，由 block type 迴圈取代）；type 級分類：0x20（指令不存在）→ 整組 NOT_SUPPORTED，0x24/0x25（該 type 參數被拒）→ 該 type NOT_SUPPORTED，其餘同主矩陣判定邏輯。block type 結果**併入 summary 統計**並計入進度列（79 步）；JSON 輸出位於 `block_type_matrix`（每項含 `code` / `size` / `name` / `mandatory` / `result` / `detail` / `sense_hex`）。
+工具對 code 0/1/2/3/8/9/10/11/12/13 各探測一次（READ CD 0xBE 因此不再出現在 opcode 矩陣中，由 block type 迴圈取代）；type 級分類：0x20（指令不存在）→ 整組 NOT_SUPPORTED，0x24/0x25（該 type 參數被拒）→ 該 type NOT_SUPPORTED，其餘同主矩陣判定邏輯。block type 結果**併入 summary 統計**並計入進度列（82 步）；JSON 輸出位於 `block_type_matrix`（每項含 `code` / `size` / `name` / `mandatory` / `result` / `detail` / `sense_hex`）。
 
 ## 指令矩陣分類
 
 | 類別 | 數量 | 說明 |
 | --- | --- | --- |
-| SPC | 21 | SCSI Primary Commands 基礎（INQUIRY、MODE SENSE、READ 10、LOG SENSE、LOCK/UNLOCK CACHE 等） |
+| SPC | 25 | SCSI Primary Commands 基礎（INQUIRY、MODE SENSE、READ 10、LOG SENSE、LOCK/UNLOCK CACHE、RESERVE/RELEASE 6/10、VERIFY 10/12 等） |
 | MMC | 24 | 光碟媒體指令（GET CONFIGURATION、READ DISC INFORMATION、REPORT LUNS、SECURITY PROTOCOL IN、READ/WRITE 12、MECHANISM STATUS 等；READ CD 以 block type 矩陣另行探測） |
-| DANGEROUS | 24 | 寫入/破壞性類（BLANK、FORMAT、WRITE、ERASE 10、LOG SELECT、STOP PLAY/SCAN、PLAY AUDIO 12、SCAN 等；僅 `--dangerous` 完整相容性模式時**真實發送**） |
+| DANGEROUS | 23 | 寫入/破壞性類（BLANK、FORMAT、WRITE、ERASE 10、LOG SELECT、STOP PLAY/SCAN、PLAY AUDIO 12、SCAN 等；僅 `--dangerous` 完整相容性模式時**真實發送**） |
 | READ CD block types | +10 | Table 600 每種 block type 各測一次（併入 summary） |
 
 ### 判定邏輯
@@ -258,7 +258,7 @@ repo 在 WSL 檔案系統時，直接 `cmd.exe /c build.bat` 會遇到兩個坑�
 
 ```bash
 python3 -m py_compile odd_probe.py odd_probe_gui.py   # 語法驗證
-python3 tests/test_odd_assertions.py                  # Logic Assertion（134 項，含 MMC-6 對齊回歸）
+python3 tests/test_odd_assertions.py                  # Logic Assertion（213 項，含 MMC-6 對齊回歸）
 python3 tests/test_odd_gui_logic.py                   # GUI 純邏輯測試（26 項，headless）
 xvfb-run -a python3 tests/gui_smoke.py                # GUI 實機 smoke（需顯示；headless 用 xvfb）
 ```
@@ -268,6 +268,13 @@ xvfb-run -a python3 tests/gui_smoke.py                # GUI 實機 smoke（需�
 MIT（依專案管理決定；本倉庫初始提交未含授權檔）。
 
 ## 📦 版本與 Release
+
+### v1.4.0 (2026-08-08)
+- **P0 spec fixes（MMC-6 Table 7 交叉驗證）**：
+  - 0x56 修正為 **RESERVE (10)**（Table 7：RESERVE = 16h/56h；舊標 CLOSE TRACK/SESSION (old) 為誤標，真正的 CLOSE TRACK/SESSION = 5Bh），並自 DANGEROUS 區塊移至 SPC（不再於 `--dangerous` 真實發送）
+  - 新增 **RELEASE (6/10)** 0x17/0x57（Table 7：RELEASE = 17h/57h）
+  - 新增 **VERIFY (12)** 0xAF（Table 7：VERIFY = 2Fh/AFh；BYTCHK=0、verification length=0 → 不驗證任何 block，安全）
+- **計數同步**：指令矩陣 69 → **72** opcodes（SPC 25 / MMC 24 / DANGEROUS 23）、dangerous 26 項、TOTAL_PROBE_STEPS 82（72 + 10 block types）；0xAF 納入 MMC6_OPCODES
 
 ### v1.3.0 (2026-08-08)
 - **P0 修復**（2026-08-08 code review）：READ CD (0xBE) block-type 矩陣 CDB 錯位（byte 6 Transfer Length MSB / byte 9 Main Channel Selection）與 Expected Sector Type 規格表誤植、RSOC (0xA3) allocation length 移至 bytes 6-7、REPORT LUNS (0xA0) 改為 12-byte CDB、GET CONFIGURATION Linux resid 截斷（消除零填充假 feature）、READ CAPACITY block_len clamp（0xFFFFFFFF 不再 MemoryError）、GUI --dangerous 確認文案對齊引擎真實行為（BLANK 抹碟 / FORMAT / CLOSE TRACK/SESSION / WRITE / 彈 tray）
@@ -280,7 +287,7 @@ MIT（依專案管理決定；本倉庫初始提交未含授權檔）。
   - SPC 區塊 5 個：REZERO UNIT (0x01)、RESERVE 6 (0x16)、PREFETCH 10 (0x34)、LOCK/UNLOCK CACHE (0x36)、LOG SENSE (0x4C)
   - DANGEROUS 區塊 5 個：ERASE 10 (0x2C，抹除媒體區塊)、LOG SELECT (0x4D)、STOP PLAY/SCAN (0x4E)、PLAY AUDIO 12 (0xA5)、SCAN (0xBA)
 - **0x4E 範例語法修正**：STOP PLAY/SCAN CDB 範例修正（10-byte，正確 opcode 名稱對應）
-- **計數同步**：SPC/MMC/DANGEROUS = 21/24/24、dangerous 27 項、TOTAL_PROBE_STEPS 79（69 opcodes + 10 block types）、assertion 134 項；README / version_info / DEBT 一併更新
+- **計數同步**：SPC/MMC/DANGEROUS = 25/24/23、dangerous 26 項、TOTAL_PROBE_STEPS 82（72 opcodes + 10 block types）、assertion 134 項；README / version_info / DEBT 一併更新
 
 ### v1.2.0 (2026-08-08)
 - **RSOC probe**：新增 MAINTENANCE IN / REPORT SUPPORTED OPERATION CODES（0xA3 SA=0x0C，SPC-3）— 驅動回報自身支援的 opcode 清單，人讀輸出顯示 Drive-Reported Opcodes
@@ -289,7 +296,7 @@ MIT（依專案管理決定；本倉庫初始提交未含授權檔）。
 - 指令矩陣 58 → 59 opcodes（+1 RSOC）
 
 ### v1.1.0 (2026-08-07)
-- **MMC-6 完整對齊**：指令矩陣 45 → **58** opcodes（MMC-6 Table 226/227 全部 48 指令 + 11 legacy），新增 FORMAT UNIT、WRITE AND VERIFY、REPAIR TRACK、READ BUFFER CAPACITY、REPORT LUNS、SECURITY PROTOCOL IN/OUT、SEND KEY、LOAD/UNLOAD MEDIUM、SET READ AHEAD、READ/WRITE (12)、READ MEDIA SERIAL NUMBER、READ CD MSF、MECHANISM STATUS
+- **MMC-6 指令探測覆蓋**：指令矩陣 45 → **58** opcodes（MMC-6 Table 226/227 指令探測覆蓋 + 11 legacy），新增 FORMAT UNIT、WRITE AND VERIFY、REPAIR TRACK、READ BUFFER CAPACITY、REPORT LUNS、SECURITY PROTOCOL IN/OUT、SEND KEY、LOAD/UNLOAD MEDIUM、SET READ AHEAD、READ/WRITE (12)、READ MEDIA SERIAL NUMBER、READ CD MSF、MECHANISM STATUS
 - **CDB 錯誤修正**：0xA0 由 REPORT KEY 改為 **REPORT LUNS**；0xA2 由 SEND KEY 改為 **SECURITY PROTOCOL IN**；新增 0xA3 SEND KEY（12-byte）；12-byte/16-byte CDB 支援；全部指令 CDB 依 spec 複查
 - **data direction 修正**：新增 `dir: in/out/none` 欄位，`SG_DXFER_TO_DEV` / `SCSI_IOCTL_DATA_OUT` 支援，寫入類指令不再因方向錯誤而 EINVAL
 - **完整相容性測試模式**（產品廠商需求）：`--dangerous` 下所有指令真實發送（BLANK 抹碟 / FORMAT / CLOSE TRACK / 彈 tray / WRITE 寫入）；唯一例外 WRITE BUFFER firmware mode
