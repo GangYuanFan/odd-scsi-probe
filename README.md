@@ -233,7 +233,7 @@ repo 在 WSL 檔案系統時，直接 `cmd.exe /c build.bat` 會遇到兩個坑�
 
 **唯一例外（永遠不執行）：**
 
-- **WRITE BUFFER (0x3B) 的 firmware download / update mode（0x05 / 0x0F / 0x0A 等）** — 磚機風險，對相容性測試無意義；WRITE BUFFER 以 mode 0x00（device buffer）測試
+- **WRITE BUFFER (0x3B)**：僅允許 mode 0x00（device buffer）；任何 firmware download/update mode（0x04–0x0F 等）由集中閘門 `fw_flash_blocked()` 硬性拒絕，即使 `--dangerous` 也永不發送（anti-brick 保證）— 磚機風險，對相容性測試無意義
 
 其他設計：
 1. 所有指令 timeout 預設 5 秒，防止裝置 hang
