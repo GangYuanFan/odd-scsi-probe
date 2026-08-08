@@ -355,6 +355,56 @@ try:
 finally:
     op.scsi_execute = orig_exec
 
+print("== REQUEST SENSE rescue (P1-7) ==")
+orig_exec = op.scsi_execute
+try:
+    calls = []
+    def mk_exec(rs_result, main_result=(0x02, b"", b"", b"")):
+        def exec_(path, cdb, alloc, timeout_s, direction="in", out_data=b""):
+            calls.append(bytes(cdb)[0])
+            if cdb[0] == 0x03:
+                return rs_result
+            return main_result
+        return exec_
+    gc16 = bytes([0x46, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0])
+    op.scsi_execute = mk_exec((0x00, b"", s72(2, 0x3A), ""))
+    st, se, da, er = op._scsi_execute_rescued("/dev/fake", gc16, 16, 1)
+    check("CC + empty sense -> rescue recovers descriptor sense (NEEDS_MEDIA path)",
+          st == 0x02 and op._parse_sense(se) == (2, 0x3A, 0x00), se.hex())
+    check("rescue issued exactly one REQUEST SENSE", calls.count(0x03) == 1, str(calls.count(0x03)))
+    calls.clear()
+    op.scsi_execute = mk_exec((0x02, b"", b"", b""))  # REQUEST SENSE also CC + empty
+    st, se, da, er = op._scsi_execute_rescued("/dev/fake", gc16, 16, 1)
+    check("rescue failure: original sense kept, exactly 1 RS call (no recursion)",
+          st == 0x02 and se == b"" and calls.count(0x03) == 1, f"calls={calls.count(0x03)}")
+    calls.clear()
+    op.scsi_execute = mk_exec((0x00, b"", s72(2, 0x3A), ""), (0x00, b"", b"\x00" * 16, ""))
+    st, se, da, er = op._scsi_execute_rescued("/dev/fake", gc16, 16, 1)
+    check("GOOD status -> no rescue issued", st == 0x00 and calls.count(0x03) == 0, str(calls))
+    calls.clear()
+    op.scsi_execute = mk_exec((0x00, b"", s72(2, 0x3A), ""), (0, b"", b"", "ioctl error errno=22"))
+    st, se, da, er = op._scsi_execute_rescued("/dev/fake", gc16, 16, 1)
+    check("ioctl error -> no rescue issued", "errno=22" in er and calls.count(0x03) == 0, str(calls))
+    # probe_device integration: 0x51 cache path classifies with rescued sense
+    calls.clear()
+    def rs_exec2(path, cdb, alloc, timeout_s, direction="in", out_data=b""):
+        if cdb[0] == 0x25:
+            return (0x00, b"", (0).to_bytes(4, "big") + (2048).to_bytes(4, "big"), "")
+        if cdb[0] == 0x51:
+            return (0x02, b"", b"", b"")  # drive swallowed auto-sense
+        if cdb[0] == 0x03:
+            return (0x00, b"", s72(2, 0x3A), "")
+        return (0x00, b"", b"\x00" * max(alloc, 1), "")
+    op.scsi_execute = rs_exec2
+    r = op.probe_device("/dev/fake", 1, False)
+    e51 = next(c for c in r["commands"] if c["opcode"] == "0x51")
+    check("probe_device: 0x51 NEEDS_MEDIA via REQUEST SENSE rescue (cache path)",
+          e51["result"] == "NEEDS_MEDIA" and "MEDIUM NOT PRESENT" in e51["detail"], str(e51))
+    check("probe_device: rescued sense not leaked to other entries",
+          all(c["opcode"] != "0x51" or c is e51 for c in r["commands"]))
+finally:
+    op.scsi_execute = orig_exec
+
 print("== parse_rsoc (SPC-3 REPORT SUPPORTED OPERATION CODES) ==")
 fake = b"\x00\x10\x00\x00" + bytes([0x12]) + b"\x00" * 7 + bytes([0xA3]) + b"\x00" * 7 + bytes([0x25]) + b"\x00" * 7
 check("parse_rsoc extracts 0x12/0x25/0xA3 descriptors",

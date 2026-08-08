@@ -542,6 +542,25 @@ def classify_cd_block_type(status, sense, err_str):
     return label, detail
 
 
+REQUEST_SENSE_CDB = bytes([0x03, 0, 0, 0, 0x12, 0])
+
+
+def _scsi_execute_rescued(dev, cdb, alloc, timeout_s, direction="in", out_data=b""):
+    """scsi_execute + one-shot REQUEST SENSE rescue (P1-7): when a command
+    returns CHECK CONDITION with invalid/empty sense (some USB bridges
+    swallow auto-sense), re-issue REQUEST SENSE (0x03, alloc 18) once and
+    classify with the recovered sense. Never recurses — the rescue call
+    goes straight to scsi_execute."""
+    status, sense, data, err = scsi_execute(dev, cdb, alloc, timeout_s,
+                                            direction=direction, out_data=out_data)
+    if status == 0x02 and not err and _sense_is_invalid(sense):
+        rs_status, rs_sense, rs_data, rs_err = scsi_execute(dev, REQUEST_SENSE_CDB, 18, timeout_s)
+        recovered = rs_data if (len(rs_data) >= 2 and rs_data[0] != 0) else rs_sense
+        if not rs_err and rs_status == 0x00 and not _sense_is_invalid(recovered):
+            return status, recovered, data, err
+    return status, sense, data, err
+
+
 def _read_cd_cdb(code):
     """READ CD (0xBE) CDB for one Table 352 matrix row. Layout mirrors Linux
     drivers/cdrom/cdrom.c cdrom_read_block(): cmd[1] = EST<<2, cmd[6..8] =
@@ -718,7 +737,7 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
         result["serial_number"] = inquiry_serial(dev, timeout_s)
 
     # 2) GET CONFIGURATION (also feeds the matrix below)
-    gc_status, gc_sense, gc_data, gc_err = scsi_execute(
+    gc_status, gc_sense, gc_data, gc_err = _scsi_execute_rescued(
         dev, bytes([0x46, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), 65535, timeout_s)
     if not gc_err and gc_status == 0x00 and gc_data:
         current, profiles, features = parse_get_configuration(gc_data)
@@ -729,7 +748,7 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
 
     # 3) READ DISC INFORMATION
     disc_type = None
-    di_status, di_sense, di_data, di_err = scsi_execute(
+    di_status, di_sense, di_data, di_err = _scsi_execute_rescued(
         dev, bytes([0x51, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), 65535, timeout_s)
     if not di_err and di_status == 0x00:
         disc_type = parse_disc_info(di_data)
@@ -743,7 +762,7 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
     # 4) READ CAPACITY — media sector (block) size; READ 10 alloc depends on
     #    it (CD raw is 2352 B, DVD/BD/HD-DVD are fixed 2048 B).
     media_block_size = None
-    rc_status, rc_sense, rc_data, rc_err = scsi_execute(
+    rc_status, rc_sense, rc_data, rc_err = _scsi_execute_rescued(
         dev, bytes([0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0]), 8, timeout_s)
     if not rc_err and rc_status == 0x00 and len(rc_data) >= 8:
         block_len = struct.unpack(">I", rc_data[4:8])[0]
@@ -761,7 +780,7 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
     block_type_matrix = []
     for code in CD_BLOCK_TYPE_CODES:
         bt = CD_BLOCK_TYPES[code]
-        status, sense, data, err = scsi_execute(dev, _read_cd_cdb(code), bt["size"], timeout_s)
+        status, sense, data, err = _scsi_execute_rescued(dev, _read_cd_cdb(code), bt["size"], timeout_s)
         label, detail = classify_cd_block_type(status, sense, err)
         block_type_matrix.append({
             "code": code, "size": bt["size"], "name": bt["name"],
@@ -835,9 +854,9 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
                 # WRITE BUFFER mode 0x00 (combined header+data): 4-byte header
                 # (buffer id 0, offset 0) + 4 data bytes. Firmware modes are NEVER used.
                 out_data = bytes([0x00, 0x00, 0x00, 0x00, 0xAA, 0xAA, 0xAA, 0xAA])
-            status, sense, data, err = scsi_execute(dev, cmd["cdb"], alloc, timeout_s,
-                                                    direction=cmd.get("dir", "in"),
-                                                    out_data=out_data)
+            status, sense, data, err = _scsi_execute_rescued(dev, cmd["cdb"], alloc, timeout_s,
+                                                             direction=cmd.get("dir", "in"),
+                                                             out_data=out_data)
             label, detail = classify(status, sense, err)
             if cmd.get("rsoc") and label == "SUPPORTED" and data:
                 result["rsoc_opcodes"] = parse_rsoc(data)
