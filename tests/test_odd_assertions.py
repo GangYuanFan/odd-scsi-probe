@@ -12,6 +12,7 @@ import contextlib
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import odd_probe as op
+import report_html
 
 passed = failed = 0
 def check(name, cond, extra=""):
@@ -970,6 +971,62 @@ c = op.evaluate_compatibility(_fake_result("CD-ROM", 0x08, {"0x28": "SUPPORTED",
 check("summary counts sum to DB row count",
       sum(c["summary"].values()) == len(op.EXPECTED_COMMANDS["CD-ROM"])
       and c["summary"]["PASS"] >= 1 and c["summary"]["FAIL"] == 0)
+
+print("\n== P1-3c: compatibility matrix in text + HTML reports ==")
+# Golden vector: a probe result dict with evaluate_compatibility() output must
+# render the Compatibility section in both format_human() and format_html().
+def _human_result(compat):
+    return {"device": "/dev/fake", "mode": "safe",
+            "vendor": "TEST", "product": "FAKE ODD", "revision": "1.0",
+            "peripheral_type": 5, "peripheral_type_name": "CD/DVD",
+            "serial_number": "SN123", "current_profile": 0x08,
+            "current_profile_name": "CD-ROM", "profiles": [], "features": [],
+            "media_type": "CD-ROM", "media_block_size_name": "2048",
+            "commands": [{"opcode": "0x28", "name": "READ 10", "category": "SPC",
+                          "result": "SUPPORTED", "detail": ""},
+                         {"opcode": "0x2A", "name": "WRITE 10", "category": "DANGEROUS",
+                          "result": "NOT_SUPPORTED", "detail": ""}],
+            "block_type_matrix": [], "dvd_structure_matrix": [],
+            "bd_structure_matrix": [],
+            "summary": {"SUPPORTED": 1, "NOT_SUPPORTED": 1, "NEEDS_MEDIA": 0,
+                        "SKIPPED": 0, "TIMEOUT": 0, "OTHER": 0},
+            "compatibility": compat}
+
+_h = op.format_human(_human_result(
+    op.evaluate_compatibility(_fake_result(
+        "CD-ROM", 0x08, {"0x28": "SUPPORTED", "0x2A": "NOT_SUPPORTED"}))))
+check("format_human: contains 'Spec Compatibility Matrix' section",
+      "Spec Compatibility Matrix" in _h, "missing section")
+check("format_human: section names the current profile",
+      "CD-ROM" in _h and "0x0008" in _h, "profile missing")
+check("format_human: at least one 'PASS' verdict rendered", "PASS" in _h, _h)
+check("format_human: FAIL row marked with red glyph", "🔴 FAIL" in _h, _h)
+check("format_human: expected->actual verdict line format",
+      "0x28 0x28: M → SUPPORTED = ✅ PASS" in _h, "format mismatch")
+# profile not in DB -> note text instead of rows
+_h2 = op.format_human(_human_result(
+    {"profile": "Mystery Drive", "profile_code": "0x9999", "rows": [],
+     "summary": {"PASS": 0, "FAIL": 0, "OPTIONAL": 0, "INFO": 0},
+     "note": "profile not in spec DB"}))
+check("format_human: unknown profile shows note",
+      "profile not in spec DB" in _h2 and "Mystery Drive" in _h2, _h2)
+# HTML report integration
+_hf = report_html.format_html(_human_result(
+    op.evaluate_compatibility(_fake_result(
+        "CD-ROM", 0x08, {"0x28": "SUPPORTED", "0x2A": "NOT_SUPPORTED"}))))
+check("format_html: renders Compatibility Matrix card",
+      "Spec Compatibility Matrix" in _hf, "missing card")
+check("format_html: PASS/FAIL count chips + FAIL row styling",
+      ">PASS<" in _hf and ">FAIL<" in _hf and "NOT_SUPPORTED" in _hf, "card content")
+_hf2 = report_html.format_html(_human_result(None))
+check("format_html: no compatibility -> no card, no exception",
+      "Spec Compatibility Matrix" not in _hf2, "unexpected card")
+_hf3 = report_html.format_html(_human_result(
+    {"profile": "Mystery Drive", "profile_code": "0x9999", "rows": [],
+     "summary": {"PASS": 0, "FAIL": 0, "OPTIONAL": 0, "INFO": 0},
+     "note": "profile not in spec DB"}))
+check("format_html: unknown profile note rendered",
+      "profile not in spec DB" in _hf3, "missing note")
 
 print(f"\nRESULT: {passed} passed / {failed} failed")
 sys.exit(1 if failed else 0)

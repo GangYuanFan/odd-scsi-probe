@@ -1358,6 +1358,24 @@ def format_human(r):
                     "NEEDS_RECORDED_MEDIA": "🟡",
                     "SKIPPED": "🔒", "TIMEOUT": "⏱️", "OTHER": "⚠️"}.get(row["result"], "?")
             lines.append(f"  {row['format']:<8}{row['name']:<58}{icon} {row['result']}")
+    # P1-3c: spec compatibility matrix (evaluate_compatibility output) — judge
+    # the probed matrix against MMC-6 Table 7 expected command sets.
+    compat = r.get("compatibility")
+    if compat:
+        lines.append("")
+        lines.append(f"Spec Compatibility Matrix (MMC-6 Table 7): "
+                     f"{compat.get('profile', '?')} ({compat.get('profile_code', '?')})")
+        if compat.get("rows"):
+            lines.append("  Verdict: ✅ PASS (spec met)  🔴 FAIL (mandatory missing)  ⚪ OPTIONAL  🟡 INFO")
+            for row in compat["rows"]:
+                icon = {"PASS": "✅", "FAIL": "🔴", "OPTIONAL": "⚪", "INFO": "🟡"}.get(row["verdict"], "?")
+                lines.append(f"  {row['opcode']} {row['name']}: {row['expected']} → "
+                             f"{row['actual']} = {icon} {row['verdict']}")
+            s = compat.get("summary") or {}
+            lines.append(f"  Compat summary: {s.get('PASS', 0)} PASS / {s.get('FAIL', 0)} FAIL / "
+                         f"{s.get('OPTIONAL', 0)} OPTIONAL / {s.get('INFO', 0)} INFO")
+        elif compat.get("note"):
+            lines.append(f"  {compat['note']}")
     s = r["summary"]
     lines.append("")
     lines.append(f"Summary: {s['SUPPORTED']} SUPPORTED / {s['NOT_SUPPORTED']} NOT SUPPORTED / "

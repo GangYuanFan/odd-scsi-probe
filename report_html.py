@@ -5,7 +5,7 @@ Pure stdlib (html, datetime). No external dependencies.
 import html
 from datetime import datetime
 
-TOOL_VERSION = "odd-scsi-probe v1.3.0"
+TOOL_VERSION = "odd-scsi-probe v1.5.0"
 
 _RESULT_COLORS = {
     "SUPPORTED": ("#052e16", "#4ade80"),      # green
@@ -102,6 +102,46 @@ def _matrix_table(rows, headers):
             f"<thead><tr>{thead}</tr></thead>{''.join(trs)}</table>")
 
 
+def _compat_card(compat):
+    """P1-3c: Spec Compatibility Matrix card (MMC-6 Table 7 expected DB)."""
+    if not compat:
+        return ""
+    prof = _esc(compat.get("profile", "?"))
+    code = _esc(compat.get("profile_code", ""))
+    title = (f"📊 Spec Compatibility Matrix (MMC-6 Table 7) — {prof}"
+             + (f" ({code})" if code else ""))
+    note = compat.get("note")
+    if note:
+        body = f'<p style="color:#f87171;margin:0">⚠️ {_esc(note)}</p>'
+    else:
+        summ = compat.get("summary") or {}
+        vmeta = [("PASS", summ.get("PASS", 0), "#22c55e"),
+                 ("FAIL", summ.get("FAIL", 0), "#ef4444"),
+                 ("OPTIONAL", summ.get("OPTIONAL", 0), "#94a3b8"),
+                 ("INFO", summ.get("INFO", 0), "#eab308")]
+        cards = "".join(
+            f'<div style="flex:1;min-width:90px;background:#0f172a;border-radius:10px;'
+            f'padding:12px;text-align:center">'
+            f'<div style="font-size:22px;font-weight:800;color:{color}">{n}</div>'
+            f'<div style="color:#94a3b8;font-size:11px;margin-top:4px">{k}</div></div>'
+            for k, n, color in vmeta)
+        vcolor = {"PASS": "SUPPORTED", "FAIL": "NOT_SUPPORTED",
+                  "OPTIONAL": "SKIPPED", "INFO": "NEEDS_MEDIA"}
+        rows = []
+        for row in compat.get("rows", []):
+            rows.append({
+                "_cells": [_esc(row.get("opcode")), _esc(row.get("name")),
+                           _esc(row.get("expected")), _esc(row.get("actual")),
+                           _esc(row.get("verdict"))],
+                "result": vcolor.get(row.get("verdict"), "OTHER"),
+            })
+        body = (f'<div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">{cards}</div>'
+                + _matrix_table(rows, ["Opcode", "Command", "Expected", "Actual", "Verdict"]))
+    return (f'<div style="background:#1e293b;border-radius:14px;padding:20px;'
+            f'margin-top:20px;box-shadow:0 4px 14px rgba(0,0,0,.35)">'
+            f'<h2 style="color:#e2e8f0;font-size:17px;margin:0 0 12px">{title}</h2>{body}</div>')
+
+
 def format_html(r):
     """Return a complete standalone HTML document for probe result dict r."""
     dev_name = f"{r.get('vendor') or '?'} {r.get('product') or r.get('device')}"
@@ -155,6 +195,7 @@ def format_html(r):
     <h2 style="color:#e2e8f0;font-size:17px;margin:0 0 12px">📋 SCSI Command Matrix</h2>
     {_matrix_table(cmds, ["Opcode", "Name", "Category", "Result", "Detail"])}
   </div>
+  {_compat_card(r.get("compatibility"))}
   <div style="background:#1e293b;border-radius:14px;padding:20px;margin-top:20px;box-shadow:0 4px 14px rgba(0,0,0,.35)">
     <h2 style="color:#e2e8f0;font-size:17px;margin:0 0 12px">💿 Data Block Type Matrix (READ CD, MMC Table 600)</h2>
     {_matrix_table(bts, ["Type", "Size", "Result", "Detail"])}
