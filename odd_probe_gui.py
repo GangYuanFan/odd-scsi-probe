@@ -12,8 +12,11 @@ Run:
   pyinstaller --onefile --windowed --name odd-probe odd_probe_gui.py
 
 Safety: the --dangerous equivalent is off by default and asks for explicit
-confirmation when enabled. BLANK / CLOSE TRACK/SESSION are NEVER sent —
-that is enforced inside odd_probe.py itself and cannot be bypassed here.
+confirmation when enabled. In --dangerous mode every command is sent for
+real: BLANK erases the disc, FORMAT UNIT formats media, CLOSE TRACK/SESSION
+closes sessions, WRITE 10/12 writes data, LOAD/UNLOAD operates the tray.
+Only WRITE BUFFER firmware modes (0x05/0x0F/0x0A) are never executed.
+Use a sacrificial test disc!
 """
 
 import json
@@ -277,9 +280,11 @@ class OddProbeApp(tk.Tk):
             return
         ok = messagebox.askyesno(
             "確認",
-            "⚠️ 啟用寫入類指令存在性測試？\n\n"
-            "僅以「零長度 / 無效參數」CDB 測試 opcode 是否存在，不會寫入任何資料。\n"
-            "BLANK / CLOSE TRACK/SESSION 仍永不執行。",
+            "⚠️ 此模式會真實執行所有指令！\n\n"
+            "BLANK 抹除整片光碟、FORMAT UNIT 格式化媒體、\n"
+            "CLOSE TRACK/SESSION 關閉 session、WRITE 10/12 寫入資料、\n"
+            "LOAD/UNLOAD 操作托盤。\n\n"
+            "請使用可犧牲的測試片！",
             parent=self)
         if not ok:
             self.dangerous_var.set(False)
