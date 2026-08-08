@@ -338,7 +338,14 @@ if os.name == "posix":
                 pass  # fall through to sense classification
             else:
                 return (0, bytes(sense_buf.raw), b"", f"ioctl error errno={errno}")
-        data = bytes(data_buf.raw[:alloc]) if data_buf else b""
+        if data_buf:
+            # Linux sg reports resid = bytes NOT transferred; keep only what
+            # the device actually returned (resid < 0 overrun => full buffer)
+            # so zero padding never pollutes parsers (P0-4).
+            n = max(0, alloc - hdr.resid) if hdr.resid > 0 else alloc
+            data = bytes(data_buf.raw[:n])
+        else:
+            data = b""
         return (hdr.status, bytes(sense_buf.raw[: hdr.sb_len_wr or 32]), data, "")
 
 # ---------------------------------------------------------------------------
@@ -541,6 +548,12 @@ def parse_get_configuration(data):
     """Returns (current_profile, profiles, features)."""
     if len(data) < 8:
         return None, [], []
+    # Belt-and-suspenders (P0-4): bytes 0-1 Data Length give the true response
+    # size (8-byte header + descriptor list); drop zero padding / stale tail.
+    data_len = struct.unpack(">H", data[0:2])[0]
+    total = 8 + data_len
+    if total < len(data):
+        data = data[:total]
     current_profile = struct.unpack(">H", data[6:8])[0]
     profiles, features = [], []
     off = 8

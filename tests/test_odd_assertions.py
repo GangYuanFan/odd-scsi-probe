@@ -68,7 +68,7 @@ check("revision", r["revision"] == "1.02")
 
 print("== parse_get_configuration() ==")
 gc = bytearray(8)
-gc[0:2] = (0x1C).to_bytes(2, "big")
+gc[0:2] = (0x14).to_bytes(2, "big")  # Data Length 20 -> total 8+20=28 (matches payload)
 gc[6:8] = (0x41).to_bytes(2, "big")  # current profile BD-R Sequential
 gc += (0x0000).to_bytes(2, "big") + bytes([0x03, 12])          # Profile List feature, current+persistent, add_len=12
 gc += (0x0008).to_bytes(2, "big") + bytes([0x01, 0x00])        # CD-ROM, current
@@ -88,6 +88,52 @@ check("name_profile 0x41", op.name_profile(0x41) == "BD-R Sequential")
 check("name_profile unknown", op.name_profile(0x77) == "unknown")
 check("name_feature 0x0040", op.name_feature(0x0040) == "BD Read")
 check("name_feature unknown", op.name_feature(0x1234) == "unknown")
+
+print("== parse_get_configuration: Data Length truncation (P0-4 belt-and-suspenders) ==")
+# Simulate a real Linux response: 28 valid bytes + 64 KB zero padding.
+# The Data Length field (bytes 0-1, total = 8 + data_length = 28) must cut
+# the padding so no fake 0x0000 features are parsed (the P0-4 pollution bug).
+gc_pad = bytes(gc) + b"\x00" * 65500
+cur2, profs2, feats2 = op.parse_get_configuration(gc_pad)
+check("zero padding dropped (still 3 profiles / 2 features)",
+      len(profs2) == 3 and len(feats2) == 2, f"{len(profs2)}/{len(feats2)}")
+check("no fake 0x0000 feature rows from padding",
+      all(f["code"] != 0 or i == 0 for i, f in enumerate(feats2)) and feats2[0]["code"] == 0x0000,
+      str([f["code"] for f in feats2]))
+# A truncated response (shorter than Data Length claims) is left untouched.
+gc_short = bytes(gc)[:20]
+cur3, profs3, feats3 = op.parse_get_configuration(gc_short)
+check("short response tolerated (no crash, partial parse)",
+      cur3 is not None and isinstance(feats3, list))
+
+print("== scsi_execute resid truncation (P0-4, Linux sg) ==")
+real_open, real_close, real_ioctl = op.os.open, op.os.close, op._libc.ioctl
+op.os.open = lambda path, flags, *a: 42
+op.os.close = lambda fd: None
+try:
+    for resid, expect in ((4, 16), (0, 20), (-4, 20), (20, 0)):
+        holder = {"resid": resid}
+        def fake_ioctl(fd, req, arg, _h=holder):
+            hdr = ctypes.cast(arg, ctypes.POINTER(op.SgIoHdr)).contents
+            if hdr.dxferp:
+                ptr = ctypes.cast(hdr.dxferp, ctypes.POINTER(ctypes.c_ubyte))
+                for i in range(hdr.dxfer_len):
+                    ptr[i] = i & 0xFF
+            hdr.status = 0x00
+            hdr.resid = _h["resid"]
+            hdr.sb_len_wr = 0
+            return 0
+        op._libc.ioctl = fake_ioctl
+        st, se, data, err = op.scsi_execute(
+            "/dev/fake", bytes([0x46, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), 20, 1)
+        check(f"resid={resid} -> {expect} bytes returned (no zero padding)",
+              len(data) == expect and err == "", f"got {len(data)} err={err}")
+        if expect >= 2:
+            check(f"resid={resid} leading bytes preserved",
+                  data[0] == 0x00 and data[1] == 0x01, data[:4].hex())
+finally:
+    op.os.open, op.os.close = real_open, real_close
+    op._libc.ioctl = real_ioctl
 
 print("== parse_disc_info() — MMC-3 r10g spec layout (Disc Type = byte 8, B1) ==")
 # byte0-1 = Disc Information Length (0x0034 = 52), byte 8 = Disc Type
