@@ -246,18 +246,36 @@ check("parse_rsoc extracts 0x12/0x25/0xA3 descriptors",
       op.parse_rsoc(fake) == [0x12, 0x25, 0xA3], str(op.parse_rsoc(fake)))
 check("parse_rsoc tolerates short data", op.parse_rsoc(b"\x00\x00") == [], str(op.parse_rsoc(b"\x00\x00")))
 
-print("== READ CD / MMC Table 600 (PM requirement) ==")
-check("10 valid block type codes", tuple(op.CD_BLOCK_TYPES) == (0, 1, 2, 3, 8, 9, 10, 11, 12, 13))
+print("== READ CD / MMC-6 Table 352 (PM requirement) ==")
+check("10 matrix rows keyed 1..10", tuple(op.CD_BLOCK_TYPES) == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
 check("CD_BLOCK_TYPE_CODES matches table", set(op.CD_BLOCK_TYPE_CODES) == set(op.CD_BLOCK_TYPES))
-check("sizes per MMC Table 600", [op.CD_BLOCK_TYPES[c]["size"] for c in (0, 1, 2, 3, 8, 9, 10, 11, 12, 13)] ==
+check("sizes per Table 352 rows", [op.CD_BLOCK_TYPES[c]["size"] for c in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)] ==
       [2352, 2368, 2448, 2448, 2048, 2336, 2048, 2056, 2324, 2332])
-check("mandatory flags (8/10/13 mandatory)", [op.CD_BLOCK_TYPES[c]["mandatory"] for c in (8, 10, 13)] == [True, True, True]
-      and op.CD_BLOCK_TYPES[0]["mandatory"] is False)
-cdb0 = op._read_cd_cdb(0)
-check("READ CD code 0 CDB (byte1=0, byte6=0)", cdb0 == bytes([0xBE, 0, 0, 0, 0, 0, 0x00, 0, 1, 0, 0, 0]), cdb0.hex())
-check("READ CD code 8 CDB (byte1=0x20, user data bit)",
-      op._read_cd_cdb(8)[1] == 0x20 and op._read_cd_cdb(8)[6] == 0x10)
-check("READ CD code 13 CDB (byte1=0x34)", op._read_cd_cdb(13)[1] == 0x34)
+check("mandatory EST set per Table 352 (rows 1/5/7/9)",
+      [op.CD_BLOCK_TYPES[c]["mandatory"] for c in (1, 5, 7, 9)] == [True, True, True, True]
+      and [op.CD_BLOCK_TYPES[c]["mandatory"] for c in (2, 3, 4, 6, 8, 10)] == [False] * 6)
+# Byte-exact golden vectors: [0xBE, EST<<2, LBA(4), TL(3)=0x000001, flags, subch, ctrl]
+CD_GOLDEN = {
+    1: bytes([0xBE, 0x00, 0, 0, 0, 0, 0x00, 0x00, 0x01, 0xF8, 0x00, 0]),
+    2: bytes([0xBE, 0x00, 0, 0, 0, 0, 0x00, 0x00, 0x01, 0xF8, 0x01, 0]),
+    3: bytes([0xBE, 0x00, 0, 0, 0, 0, 0x00, 0x00, 0x01, 0xF8, 0x02, 0]),
+    4: bytes([0xBE, 0x00, 0, 0, 0, 0, 0x00, 0x00, 0x01, 0xF8, 0x03, 0]),
+    5: bytes([0xBE, 0x08, 0, 0, 0, 0, 0x00, 0x00, 0x01, 0x10, 0x00, 0]),
+    6: bytes([0xBE, 0x0C, 0, 0, 0, 0, 0x00, 0x00, 0x01, 0x10, 0x00, 0]),
+    7: bytes([0xBE, 0x10, 0, 0, 0, 0, 0x00, 0x00, 0x01, 0x10, 0x00, 0]),
+    8: bytes([0xBE, 0x10, 0, 0, 0, 0, 0x00, 0x00, 0x01, 0x50, 0x00, 0]),
+    9: bytes([0xBE, 0x14, 0, 0, 0, 0, 0x00, 0x00, 0x01, 0x10, 0x00, 0]),
+    10: bytes([0xBE, 0x14, 0, 0, 0, 0, 0x00, 0x00, 0x01, 0x50, 0x00, 0]),
+}
+check("all 10 READ CD CDBs byte-exact (golden vectors)",
+      all(op._read_cd_cdb(code) == want for code, want in CD_GOLDEN.items()),
+      "mismatch: " + str([hex(op._read_cd_cdb(c)[1]) for c in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)]))
+check("row 5 (Mode 1) CDB (byte1=0x08, byte9=0x10 user data)",
+      op._read_cd_cdb(5)[1] == 0x08 and op._read_cd_cdb(5)[9] == 0x10)
+check("row 10 (form 2 + sub-header) CDB (byte1=0x14, byte9=0x50)",
+      op._read_cd_cdb(10)[1] == 0x14 and op._read_cd_cdb(10)[9] == 0x50)
+check("row 3 (P-W pack) CDB (byte9=0xF8, byte10=0x02)",
+      op._read_cd_cdb(3)[9] == 0xF8 and op._read_cd_cdb(3)[10] == 0x02)
 bt24 = bytes([0x70, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x24, 0x00])
 check("block type 0x24 -> type NOT_SUPPORTED",
       op.classify_cd_block_type(0x02, bt24, "")[0] == "NOT_SUPPORTED")
@@ -322,15 +340,17 @@ try:
           [c[1] for c in be_calls] == [op.CD_BLOCK_TYPES[code]["size"] for code in op.CD_BLOCK_TYPE_CODES])
     check("block_type_matrix reported (10 entries)", len(r["block_type_matrix"]) == 10)
     by_code = {bt["code"]: bt for bt in r["block_type_matrix"]}
-    check("block type 0 mandatory=False / 8 mandatory=True",
-          by_code[0]["mandatory"] is False and by_code[8]["mandatory"] is True)
-    check("per-code CDB byte1 == code<<2 (bits 7-2)",
-          all(c[0][1] == (code << 2) & 0xFF
+    check("row 1 (raw) mandatory=True / row 2 (P&Q) mandatory=False",
+          by_code[1]["mandatory"] is True and by_code[2]["mandatory"] is False)
+    check("per-code CDB byte1 == EST<<2 (Table 352)",
+          all(c[0][1] == (op.CD_BLOCK_TYPES[code]["est"] << 2) & 0xFF
               for c, code in zip(be_calls, op.CD_BLOCK_TYPE_CODES)),
           [hex(c[0][1]) for c in be_calls])
-    check("per-code user-data flag: byte6=0x10 for codes >= 8",
-          all((c[0][6] == 0x10) == (code >= 8)
+    check("per-code CDB byte9/byte10 == flags/subch (kernel cdrom_read_block layout)",
+          all(c[0][9] == op.CD_BLOCK_TYPES[code]["flags"] and c[0][10] == op.CD_BLOCK_TYPES[code]["subch"]
               for c, code in zip(be_calls, op.CD_BLOCK_TYPE_CODES)))
+    check("per-code CDB transfer length bytes 6-8 == 0x000001 (1 block)",
+          all(c[0][6:9] == bytes([0x00, 0x00, 0x01]) for c, _ in zip(be_calls, op.CD_BLOCK_TYPE_CODES)))
     check("block_type_matrix entries carry sense_hex + size",
           all("sense_hex" in bt and bt["size"] == op.CD_BLOCK_TYPES[bt["code"]]["size"]
               for bt in r["block_type_matrix"]))

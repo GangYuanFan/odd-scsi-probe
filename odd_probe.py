@@ -9,8 +9,8 @@ Scans a SCSI/ATAPI optical device and reports:
   * READ DISC INFORMATION media type
   * READ CAPACITY media sector size (drives READ 10 buffer sizing)
   * Per-opcode support matrix for 69 SCSI commands: full MMC-6 Table 226/227
-    coverage (48 opcodes; READ CD 0xBE represented by the Table 600 Data
-    Block Type matrix, 10 block types) + 21 legacy/extra commands (SPC-3
+    coverage (48 opcodes; READ CD 0xBE represented by the Table 352 Expected
+    Sector Type matrix, 10 block types) + 21 legacy/extra commands (SPC-3
     extras / MMC Annex E / MMC-4 gap closure).
   * Per-command data direction (dir: in/out/none) — write-class commands are
     sent with SG_DXFER_TO_DEV / SCSI_IOCTL_DATA_OUT so DOUT opcodes are
@@ -64,22 +64,26 @@ SCSI_IOCTL_DATA_UNSPECIFIED = 2
 
 MAX_SECTOR_SIZE = 2352  # CD raw sector (DVD/BD/HD-DVD are fixed 2048 B)
 
-# MMC-6 Table 600 — READ CD Data Block Type (byte 1 bits 7-2): block size,
-# name and Mandatory/Optional status. Codes 4-6 are Reserved, 7/15 NA Vendor
-# Specific (never probed). Codes 8/10/13 are Mandatory for CD drives.
+# MMC-6 Table 352 — READ CD (0xBE) Expected Sector Type (EST, byte 1 bits
+# 7-2) matrix, 10 probed variants. Each row fixes the CDB fields that fully
+# describe the returned data: EST (byte 1), byte 9 flags (Sync/Header/User
+# Data/EDC; 0xF8 = raw all, 0x10 = user data only, 0x50 = sub-header+user)
+# and byte 10 Sub-channel selection (0x00 none / 0x01 P&Q 16B / 0x02 P-W
+# pack 96B / 0x03 raw P-W 96B). Mandatory EST set per Table 352:
+# 000b / 010b / 100b / 101b (raw / Mode 1 / XA form 1 / XA form 2).
 CD_BLOCK_TYPES = {
-    0:  {"size": 2352, "name": "Raw data", "mandatory": False},
-    1:  {"size": 2368, "name": "Raw data with P and Q Sub-channel", "mandatory": False},
-    2:  {"size": 2448, "name": "Raw data with P-W Sub-channel appended, pack form", "mandatory": False},
-    3:  {"size": 2448, "name": "Raw data with raw P-W Sub-channel appended", "mandatory": False},
-    8:  {"size": 2048, "name": "Mode 1 ISO/IEC 10149", "mandatory": True},
-    9:  {"size": 2336, "name": "Mode 2 ISO/IEC 10149", "mandatory": False},
-    10: {"size": 2048, "name": "Mode 2 CD-ROM XA form 1", "mandatory": True},
-    11: {"size": 2056, "name": "Mode 2 XA form 1 + 8B sub-header", "mandatory": False},
-    12: {"size": 2324, "name": "Mode 2 XA form 2", "mandatory": False},
-    13: {"size": 2332, "name": "Mode 2 XA form 1/2 mixed + 8B sub-header", "mandatory": True},
+    1:  {"size": 2352, "name": "Raw data (sync+header+user+EDC)", "est": 0x00, "flags": 0xF8, "subch": 0x00, "mandatory": True},
+    2:  {"size": 2368, "name": "Raw data with P and Q Sub-channel", "est": 0x00, "flags": 0xF8, "subch": 0x01, "mandatory": False},
+    3:  {"size": 2448, "name": "Raw data with P-W Sub-channel appended, pack form", "est": 0x00, "flags": 0xF8, "subch": 0x02, "mandatory": False},
+    4:  {"size": 2448, "name": "Raw data with raw P-W Sub-channel appended", "est": 0x00, "flags": 0xF8, "subch": 0x03, "mandatory": False},
+    5:  {"size": 2048, "name": "Mode 1 ISO/IEC 10149", "est": 0x02, "flags": 0x10, "subch": 0x00, "mandatory": True},
+    6:  {"size": 2336, "name": "Mode 2 ISO/IEC 10149 (formless)", "est": 0x03, "flags": 0x10, "subch": 0x00, "mandatory": False},
+    7:  {"size": 2048, "name": "Mode 2 CD-ROM XA form 1", "est": 0x04, "flags": 0x10, "subch": 0x00, "mandatory": True},
+    8:  {"size": 2056, "name": "Mode 2 XA form 1 + 8B sub-header", "est": 0x04, "flags": 0x50, "subch": 0x00, "mandatory": False},
+    9:  {"size": 2324, "name": "Mode 2 XA form 2", "est": 0x05, "flags": 0x10, "subch": 0x00, "mandatory": True},
+    10: {"size": 2332, "name": "Mode 2 XA form 2 + 8B sub-header", "est": 0x05, "flags": 0x50, "subch": 0x00, "mandatory": False},
 }
-CD_BLOCK_TYPE_CODES = (0, 1, 2, 3, 8, 9, 10, 11, 12, 13)
+CD_BLOCK_TYPE_CODES = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 
 # ---------------------------------------------------------------------------
 # Lookup tables (built in per spec)
@@ -154,7 +158,7 @@ ASC_NAMES = {
 
 # ---------------------------------------------------------------------------
 # Command matrix: 69 opcodes = full MMC-6 Table 226/227 coverage (48 opcodes;
-# READ CD 0xBE is represented by the Table 600 block-type matrix below) + 21
+# READ CD 0xBE is represented by the Table 352 block-type matrix below) + 21
 # legacy/extra commands (SPC-3 variants / MMC Annex E / MMC-4 gap closure)
 # kept for completeness and flagged legacy. CDB templates per MMC-6 rev 2g
 # (T10/1836-D), cross-checked against SPC-3 for the security/read-media-serial
@@ -253,7 +257,7 @@ CMDS = [
     {"op": 0xBA, "name": "SCAN", "cat": "DANGEROUS", "cdb": bytes([0xBA, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "dangerous": True, "legacy": True},  # 12-byte
 ]
 
-# Total probe steps = 69 opcodes + 10 READ CD Table 600 block types (79).
+# Total probe steps = 69 opcodes + 10 READ CD Table 352 block types (79).
 # progress_cb totals and the GUI progress bar must use this, not len(CMDS).
 TOTAL_PROBE_STEPS = len(CMDS) + len(CD_BLOCK_TYPE_CODES)
 
@@ -489,7 +493,7 @@ def classify(status, sense, err_str):
 
 
 def classify_cd_block_type(status, sense, err_str):
-    """Per-Data-Block-Type result for READ CD (MMC Table 600).
+    """Per-Data-Block-Type result for READ CD (MMC-6 Table 352).
 
     Unlike classify(): for READ CD, a 'parameter rejected' (ILLEGAL REQUEST
     + INVALID FIELD IN CDB 0x24 / LBA OUT OF RANGE 0x25) means the drive
@@ -506,10 +510,13 @@ def classify_cd_block_type(status, sense, err_str):
 
 
 def _read_cd_cdb(code):
-    """READ CD (0xBE) CDB for one Data Block Type code: byte 1 bits 7-2 =
-    code, byte 6 = user-data flag for user-data types (8-13), 1 block."""
-    byte6 = 0x10 if code >= 8 else 0x00  # User Data bit for user-data types
-    return bytes([0xBE, (code & 0x3F) << 2, 0, 0, 0, 0, byte6, 0x00, 0x01, 0, 0, 0])
+    """READ CD (0xBE) CDB for one Table 352 matrix row. Layout mirrors Linux
+    drivers/cdrom/cdrom.c cdrom_read_block(): cmd[1] = EST<<2, cmd[6..8] =
+    24-bit transfer length (fixed 1 block), cmd[9] = flags (0xF8 raw /
+    0x10 user data / 0x50 sub-header+user), cmd[10] = sub-channel."""
+    bt = CD_BLOCK_TYPES[code]
+    return bytes([0xBE, (bt["est"] & 0x3F) << 2, 0, 0, 0, 0,
+                  0x00, 0x00, 0x01, bt["flags"], bt["subch"], 0])
 
 # ---------------------------------------------------------------------------
 # Payload parsers
@@ -706,7 +713,7 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
     result["media_block_size"] = media_block_size
     result["media_block_size_name"] = name_block_size(media_block_size)
 
-    # 5) READ CD — probe every valid Data Block Type (MMC Table 600). Each
+    # 5) READ CD — probe every Table 352 matrix row. Each
     #    type is one matrix row (alloc = that type's block size); results are
     #    merged into the summary and drive the progress bar (79 total steps).
     block_type_matrix = []
