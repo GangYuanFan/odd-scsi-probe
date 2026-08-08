@@ -38,6 +38,22 @@ Modes (per product owner):
   * Sole exception:   WRITE BUFFER (0x3B) never uses firmware download/update
                       modes (0x05/0x0F/0x0A ...) — bricking risk, no value for
                       compatibility testing; other modes (e.g. 0x00) are used.
+
+Version 1.3.0 (2026-08-08) — P0/P1 fixes from REVIEW-2026-08-08.md:
+  * READ CD (0xBE) matrix redesigned per MMC-6 Table 352 + Linux
+    drivers/cdrom/cdrom.c cdrom_read_block() (EST<<2 / TL bytes 6-8 /
+    flags byte 9 / sub-channel byte 10)
+  * RSOC / REPORT LUNS allocation length fields corrected; GET PERFORMANCE
+    trimmed to the 12-byte MMC-6 Table 290 CDB; START STOP UNIT / PLAY AUDIO
+    10 / WRITE BUFFER / READ MEDIA SERIAL CDBs corrected
+  * Linux sg resid honored + GET CONFIGURATION Data Length clamp (no more
+    zero-fill pollution); media block size clamped to 512..4096
+  * Sense parsing supports descriptor format 0x72/0x73 (kernel
+    scsi_normalize_sense) + one-shot REQUEST SENSE rescue when a bridge
+    swallows auto-sense
+  * GET CONFIGURATION / READ DISC INFO / READ TRACK INFO / MODE SENSE 10
+    alloc capped at 4096 (Windows SCSI_PASS_THROUGH 64KB limit)
+  * scsi_execute catches OSError so a mid-probe hot-unplug keeps the result
 """
 
 import argparse
@@ -48,6 +64,8 @@ import platform
 import struct
 import sys
 import time
+
+__version__ = "1.3.0"  # v1.3.0: REVIEW-2026-08-08 P0+P1 fixes (CDB/sense/alloc/OSError)
 
 # ---------------------------------------------------------------------------
 # SCSI constants

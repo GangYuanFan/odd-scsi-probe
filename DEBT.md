@@ -17,5 +17,6 @@
 | 2026-08-07 | `odd_probe.py` `probe_device()` READ CD block types | 每裝置多發 10 次 READ CD ioctl（MMC Table 600 各 code 一次） | PM 需求：type 級支援度鑑別（燒錄機 vs 唯讀機）；無 CD media 時成本為 10 次快速 CHECK CONDITION | 若需加速：以 GET CONFIGURATION 的 CD Read feature 存在與否先行過濾 | Low |
 | 2026-08-08 | `odd_probe.py` `CMDS` 0x4D LOG SELECT | 靜態 alloc=0 但 dir=out，靠測試白名單放行（paramlen=0 實際無資料外送） | 安全考量：不帶參數送出（LOG SELECT 帶參數可改寫 drive 的 log 設定）；paramlen=0 時無資料 phase，僅驗證指令存在 | 若要真送資料：runtime 覆寫 alloc（類似 READ 10 的 media block size 覆寫） | Low |
 
+| 2026-08-08 | `odd_probe.py` 全模組（CMDS / `scsi_execute()` / `classify()` / `parse_get_configuration()`） | ~~REVIEW-2026-08-08 6 P0 + 9 P1 缺陷~~（已解，v1.3.0） | 審查發現：READ CD EST 矩陣錯位（Table 600 誤植 + user-data 旗標佔用 TL MSB）、RSOC/REPORT LUNS alloc 錯位、resid 零填充污染、descriptor sense 誤判、auto-sense 被吞無救援、Windows 65KB alloc、熱拔 OSError 崩潰 | v1.3.0 已依 kernel `cdrom.c`/`scommon.c` 與 MMC-6 校準：全部改動 CDB 有 byte-exact 黃金向量測試（195 assertions）、resid/Data Length 截斷、0x72/0x73 sense、REQUEST SENSE 一次性救援、4096 alloc 上限、OSError 保留結果 | Low |
 ---
 *Note: All `ponytail:` comments in code must have a corresponding entry here.*
