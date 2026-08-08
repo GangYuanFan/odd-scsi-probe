@@ -327,11 +327,17 @@ if os.name == "posix":
         hdr.flags = 0
         hdr.pack_id = -1
 
-        fd = os.open(path, os.O_RDWR)
         try:
-            rc = _libc.ioctl(fd, SG_IO, ctypes.byref(hdr))
-        finally:
-            os.close(fd)
+            fd = os.open(path, os.O_RDWR)
+            try:
+                rc = _libc.ioctl(fd, SG_IO, ctypes.byref(hdr))
+            finally:
+                os.close(fd)
+        except OSError as e:
+            # P1-9: hot-unplug mid-probe (USB ODD pulled) must not discard the
+            # whole result — return an error tuple so probe_device keeps the
+            # remaining 78 steps instead of raising out of main().
+            return (0, b"", b"", f"OSError: {e}")
         if rc != 0:
             errno = ctypes.get_errno()
             if hdr.status == 0x02:  # CHECK CONDITION delivered despite ioctl error
@@ -434,20 +440,24 @@ if os.name == "nt":
         for i, b in enumerate(cdb):
             spt_ptr.Cdb[i] = b
 
-        handle = kernel32.CreateFileW(
-            path, GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING, 0, None)
-        if handle == INVALID_HANDLE_VALUE:
-            return (0, b"", b"", f"CreateFileW failed ({ctypes.get_last_error()})")
         try:
-            returned = wt.DWORD(0)
-            ok = kernel32.DeviceIoControl(
-                handle, IOCTL_SCSI_PASS_THROUGH, io_buf, total, io_buf, total,
-                ctypes.byref(returned), None)
-            if not ok:
-                return (0, b"", b"", f"DeviceIoControl failed ({ctypes.get_last_error()})")
-        finally:
-            kernel32.CloseHandle(handle)
+            handle = kernel32.CreateFileW(
+                path, GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING, 0, None)
+            if handle == INVALID_HANDLE_VALUE:
+                return (0, b"", b"", f"CreateFileW failed ({ctypes.get_last_error()})")
+            try:
+                returned = wt.DWORD(0)
+                ok = kernel32.DeviceIoControl(
+                    handle, IOCTL_SCSI_PASS_THROUGH, io_buf, total, io_buf, total,
+                    ctypes.byref(returned), None)
+                if not ok:
+                    return (0, b"", b"", f"DeviceIoControl failed ({ctypes.get_last_error()})")
+            finally:
+                kernel32.CloseHandle(handle)
+        except OSError as e:
+            # P1-9: keep the probe alive on unexpected OS errors (parity with posix).
+            return (0, b"", b"", f"OSError: {e}")
 
         spt_out = ctypes.cast(io_buf, ctypes.POINTER(ScsiPassThrough)).contents
         data = bytes(io_buf.raw[ctypes.sizeof(ScsiPassThrough): ctypes.sizeof(ScsiPassThrough) + alloc])

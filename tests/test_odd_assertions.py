@@ -174,6 +174,62 @@ finally:
     op.os.open, op.os.close = real_open, real_close
     op._libc.ioctl = real_ioctl
 
+print("== scsi_execute OSError catch (P1-9, hot-unplug) ==")
+real_open2, real_close2, real_ioctl2 = op.os.open, op.os.close, op._libc.ioctl
+
+def boom_open(path, flags, *a):
+    raise OSError(19, "No such device")
+
+try:
+    op.os.open = boom_open
+    op.os.close = lambda fd: None
+    st, se, da, er = op.scsi_execute("/dev/sr9", bytes([0x00, 0, 0, 0, 0, 0]), 0, 1)
+    check("os.open OSError -> error tuple, not an exception", st == 0 and er.startswith("OSError:"), er)
+    check("classify(OSError) -> OTHER (probe keeps going)", op.classify(st, se, er)[0] == "OTHER")
+finally:
+    op.os.open, op.os.close = real_open2, real_close2
+    op._libc.ioctl = real_ioctl2
+
+# probe_device: hot-unplug on the 3rd command (GET CONFIGURATION) — the full
+# result dict must survive with the remaining 78 steps intact.
+real_open3, real_close3, real_ioctl3 = op.os.open, op.os.close, op._libc.ioctl
+counter = {"n": 0}
+def flaky_open(path, flags, *a):
+    counter["n"] += 1
+    if counter["n"] == 3:
+        raise OSError(19, "No such device")
+    return 42
+
+def ok_ioctl(fd, req, arg):
+    hdr = ctypes.cast(arg, ctypes.POINTER(op.SgIoHdr)).contents
+    if hdr.dxferp:
+        ptr = ctypes.cast(hdr.dxferp, ctypes.POINTER(ctypes.c_ubyte))
+        for i in range(hdr.dxfer_len):
+            ptr[i] = i & 0xFF
+    hdr.status = 0x00
+    hdr.resid = 0
+    hdr.sb_len_wr = 0
+    return 0
+
+try:
+    op.os.open = flaky_open
+    op.os.close = lambda fd: None
+    op._libc.ioctl = ok_ioctl
+    r = op.probe_device("/dev/fake", 1, False)
+    check("probe survives mid-probe OSError (69 commands + 10 block types)",
+          len(r["commands"]) == 69 and len(r["block_type_matrix"]) == 10,
+          f"{len(r['commands'])}/{len(r['block_type_matrix'])}")
+    e46 = next(c for c in r["commands"] if c["opcode"] == "0x46")
+    check("0x46 (hit by OSError) -> OTHER with OSError detail",
+          e46["result"] == "OTHER" and "OSError" in e46["detail"], str(e46))
+    check("0x00 still probed after the failure",
+          next(c for c in r["commands"] if c["opcode"] == "0x00")["result"] == "SUPPORTED")
+    check("summary still sums to 79 (result not discarded)",
+          sum(r["summary"].values()) == 79, str(r["summary"]))
+finally:
+    op.os.open, op.os.close = real_open3, real_close3
+    op._libc.ioctl = real_ioctl3
+
 print("== parse_disc_info() — MMC-3 r10g spec layout (Disc Type = byte 8, B1) ==")
 # byte0-1 = Disc Information Length (0x0034 = 52), byte 8 = Disc Type
 check("BD-R (byte8=0x0D)", op.parse_disc_info(bytes([0x00,0x34,0,1,1,1,1,0,0x0D,0])) == 0x0D)
