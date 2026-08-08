@@ -202,7 +202,7 @@ CMDS = [
     {"op": 0x03, "name": "REQUEST SENSE", "cat": "SPC", "cdb": bytes([0x03, 0, 0, 0, 0x12, 0]), "alloc": 18, "dir": "in"},
     {"op": 0x12, "name": "INQUIRY", "cat": "SPC", "cdb": bytes([0x12, 0, 0, 0, 0x60, 0]), "alloc": 96, "dir": "in"},
     {"op": 0x1A, "name": "MODE SENSE 6", "cat": "SPC", "cdb": bytes([0x1A, 0, 0x3F, 0, 0xFF, 0]), "alloc": 255, "dir": "in"},
-    {"op": 0x1B, "name": "START STOP UNIT", "cat": "SPC", "cdb": bytes([0x1B, 0x81, 0, 0, 0, 0]), "alloc": 0, "dir": "none"},  # START=1 spin-up + IMMED (byte 1 = 0x81), byte 4 cleared (P1-2)
+    {"op": 0x1B, "name": "START STOP UNIT", "cat": "SPC", "cdb": bytes([0x1B, 0x01, 0, 0, 0x01, 0]), "alloc": 0, "dir": "none"},  # kernel CDROMSTART (cdrom.c mmc_ioctl_cdrom_start_stop): byte1=0x01 IMMED, START bit at byte 4 bit 0 — SFF-8020i/ATAPI encoding (SPC-3's byte-1 bit-7 START does not apply to ODD firmware); spin-up, no LoEJ
     {"op": 0x1E, "name": "PREVENT ALLOW MEDIUM REMOVAL", "cat": "SPC", "cdb": bytes([0x1E, 0, 0, 0, 0x00, 0]), "alloc": 0, "dir": "none"},  # prevent=0
     {"op": 0x25, "name": "READ CAPACITY", "cat": "SPC", "cdb": bytes([0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 8, "dir": "in"},
     {"op": 0x28, "name": "READ 10", "cat": "SPC", "cdb": bytes([0x28, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0]), "alloc": 0, "dir": "in"},  # alloc overridden at runtime: media block size (READ CAPACITY) or 2352 fallback

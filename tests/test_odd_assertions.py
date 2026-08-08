@@ -318,8 +318,8 @@ check("0x3B WRITE BUFFER param len bytes 6-8 = 0x000008 (4B header + 4B data, P1
       and wb["cdb"][6:9] == (0x000008).to_bytes(3, "big") and wb["alloc"] == 8,
       wb["cdb"].hex())
 ssu = next(c for c in op.CMDS if c["op"] == 0x1B)
-check("0x1B START STOP UNIT CDB = 1B 81 00 00 00 00 (spin-up + IMMED, byte 4 cleared, P1-2)",
-      ssu["cdb"] == bytes([0x1B, 0x81, 0, 0, 0, 0]) and ssu["cdb"][1] == 0x81 and ssu["cdb"][4] == 0x00,
+check("0x1B START STOP UNIT CDB = 1B 01 00 00 01 00 (kernel CDROMSTART: IMMED + START@byte4 bit0, SFF-8020i)",
+      ssu["cdb"] == bytes([0x1B, 0x01, 0, 0, 0x01, 0]) and ssu["cdb"][1] == 0x01 and ssu["cdb"][4] == 0x01,
       ssu["cdb"].hex())
 pa = next(c for c in op.CMDS if c["op"] == 0x45)
 check("0x45 PLAY AUDIO 10 CDB: 10-byte, TL at bytes 7-8 = 0x0001 (P1-3, was 0x0100=256)",
