@@ -645,5 +645,47 @@ try:
 finally:
     op.scsi_execute = orig_exec
 
+print("== fw_flash_blocked anti-brick hard rule (WRITE BUFFER firmware modes) ==")
+# mode 0x00 (device buffer) — allowed
+check("WRITE BUFFER mode 0x00 -> False (allowed, device buffer)",
+      op.fw_flash_blocked({"op": 0x3B, "cdb": bytes([0x3B, 0x00, 0x00, 0, 0, 0, 0x00, 0x00, 0x08, 0])}) is False)
+# firmware modes — all blocked
+for m in (0x04, 0x05, 0x07, 0x0B, 0x0F):
+    check(f"WRITE BUFFER mode 0x{m:02X} -> True (blocked, firmware download/update)",
+          op.fw_flash_blocked({"op": 0x3B, "cdb": bytes([0x3B, m, 0x00, 0, 0, 0, 0x00, 0x00, 0x08, 0])}) is True)
+# short CDB (fail-safe: less than 2 bytes)
+check("WRITE BUFFER CDB 1 byte -> True (fail-safe)",
+      op.fw_flash_blocked({"op": 0x3B, "cdb": bytes([0x3B])}) is True)
+# empty CDB (fail-safe)
+check("WRITE BUFFER CDB empty -> True (fail-safe)",
+      op.fw_flash_blocked({"op": 0x3B, "cdb": b""}) is True)
+# CDB is None (fail-safe)
+check("WRITE BUFFER CDB None -> True (fail-safe)",
+      op.fw_flash_blocked({"op": 0x3B}) is True)
+# not WRITE BUFFER opcode (e.g. FLUSH CACHE 0x35)
+check("FLUSH CACHE (0x35) -> False (not WRITE BUFFER)",
+      op.fw_flash_blocked({"op": 0x35, "cdb": bytes([0x35, 0, 0, 0, 0, 0, 0, 0x00, 0, 0])}) is False)
+# no op key
+check("no 'op' key -> False (no crash)",
+      op.fw_flash_blocked({}) is False)
+# no cdb key
+check("no 'cdb' key, op=0x3B -> True (fail-safe, treated as blocked)",
+      op.fw_flash_blocked({"op": 0x3B}) is True)
+
+# integration: WRITE BUFFER in safe mode still SKIPPED via dangerous gate (mode 0x00 passes fw_flash_blocked)
+orig_exec2 = op.scsi_execute
+try:
+    op.scsi_execute = fc_exec
+    r_safe = op.probe_device("/dev/fake", 1, False)
+    wb_safe = next(c for c in r_safe["commands"] if c["opcode"] == "0x3B")
+    check("safe mode: WRITE BUFFER mode 0x00 -> SKIPPED via dangerous gate (not fw-flash gate)",
+          wb_safe["result"] == "SKIPPED" and "--dangerous" in wb_safe["detail"], wb_safe["detail"])
+    r_danger = op.probe_device("/dev/fake", 1, True)
+    wb_danger = next(c for c in r_danger["commands"] if c["opcode"] == "0x3B")
+    check("full-compat: WRITE BUFFER mode 0x00 -> sent (not blocked by fw_flash)",
+          wb_danger["result"] == "SUPPORTED", wb_danger["detail"])
+finally:
+    op.scsi_execute = orig_exec2
+
 print(f"\nRESULT: {passed} passed / {failed} failed")
 sys.exit(1 if failed else 0)

@@ -65,7 +65,7 @@ import struct
 import sys
 import time
 
-__version__ = "1.3.0"  # v1.3.0: REVIEW-2026-08-08 P0+P1 fixes (CDB/sense/alloc/OSError)
+__version__ = "1.3.1"  # v1.3.1: hard firmware-flash protection (WRITE BUFFER mode != 0x00 never sent, anti-brick)
 
 # ---------------------------------------------------------------------------
 # SCSI constants
@@ -732,6 +732,17 @@ def parse_rsoc(data):
     return sorted(set(ops))
 
 
+def fw_flash_blocked(cmd):
+    """Anti-brick hard rule (Jerry): WRITE BUFFER (0x3B) with any firmware
+    download/update mode (mode byte != 0x00, e.g. 0x04-0x0F) would flash the
+    ODD firmware — never sent, not even under --dangerous. Fail-safe: a
+    malformed/short CDB is treated as blocked."""
+    if cmd.get("op") != 0x3B:
+        return False
+    cdb = cmd.get("cdb") or b""
+    return len(cdb) < 2 or cdb[1] != 0x00
+
+
 def probe_device(dev, timeout_s, dangerous, progress_cb=None):
     """Probe one device; returns a dict (JSON-serializable).
 
@@ -856,6 +867,13 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
         entry = {"opcode": f"0x{op:02X}", "name": cmd["name"], "category": cmd["cat"]}
         if cmd.get("legacy"):
             entry["legacy"] = True
+
+        if fw_flash_blocked(cmd):
+            entry.update(result="SKIPPED",
+                         detail=f"BLOCKED by firmware-flash protection: WRITE BUFFER mode 0x{cmd['cdb'][1]:02X} (firmware download/update) is never sent — anti-brick hard rule")
+            summary["SKIPPED"] += 1
+            result["commands"].append(entry)
+            continue
 
         if cmd.get("dangerous") and not dangerous:
             entry.update(result="SKIPPED", detail="--dangerous full-compat mode not enabled")
