@@ -5,7 +5,7 @@ Pure stdlib (html, datetime). No external dependencies.
 import html
 from datetime import datetime
 
-TOOL_VERSION = "odd-scsi-probe v1.2.0"
+TOOL_VERSION = "odd-scsi-probe v1.3.0"
 
 _RESULT_COLORS = {
     "SUPPORTED": ("#052e16", "#4ade80"),      # green
