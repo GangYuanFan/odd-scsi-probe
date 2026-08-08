@@ -208,6 +208,10 @@ check("no 'unsafe' flag remains (owner removed never-send policy)",
       all(not c.get("unsafe") for c in op.CMDS))
 wb = next(c for c in op.CMDS if c["op"] == 0x3B)
 check("WRITE BUFFER uses mode 0x00 (never firmware mode)", wb["cdb"][1] == 0x00)
+ssu = next(c for c in op.CMDS if c["op"] == 0x1B)
+check("0x1B START STOP UNIT CDB = 1B 81 00 00 00 00 (spin-up + IMMED, byte 4 cleared, P1-2)",
+      ssu["cdb"] == bytes([0x1B, 0x81, 0, 0, 0, 0]) and ssu["cdb"][1] == 0x81 and ssu["cdb"][4] == 0x00,
+      ssu["cdb"].hex())
 
 print("== --timeout validation (B4) ==")
 check("_positive_int('5') == 5", op._positive_int("5") == 5)
