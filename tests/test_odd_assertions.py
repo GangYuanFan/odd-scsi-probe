@@ -115,8 +115,10 @@ check("21 SPC / 24 MMC / 24 DANGEROUS",
       str([sum(1 for c in op.CMDS if c["cat"] == k) for k in ("SPC", "MMC", "DANGEROUS")]))
 check("RSOC entry present (MAINTENANCE IN SA=0x0C)", any(c.get("rsoc") for c in op.CMDS), "missing")
 rsoc = next((c for c in op.CMDS if c.get("rsoc")), None)
-check("RSOC CDB is 12-byte MAINTENANCE IN 0xA3/0x0C",
-      rsoc is not None and rsoc["cdb"] == bytes([0xA3, 0x0C, 0, 0, 0, 0, 0, 0, 0x10, 0x00, 0, 0]),
+check("RSOC CDB is 12-byte MAINTENANCE IN 0xA3/0x0C with alloc at bytes 6-7 = 0x1000",
+      rsoc is not None and rsoc["cdb"] == bytes([0xA3, 0x0C, 0, 0, 0, 0, 0x10, 0x00, 0, 0, 0, 0])
+      and rsoc["cdb"][6:8] == (0x1000).to_bytes(2, "big")
+      and rsoc["cdb"][8:10] == bytes(2) and rsoc["alloc"] == 4096,
       str(rsoc))
 check("0x35 name covers MMC-2 FLUSH CACHE (ATAPI variant)",
       any("FLUSH CACHE" in c["name"] for c in op.CMDS if c["op"] == 0x35), "0x35 rename missing")

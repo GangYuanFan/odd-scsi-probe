@@ -201,7 +201,7 @@ CMDS = [
     {"op": 0x34, "name": "PREFETCH 10", "cat": "SPC", "cdb": bytes([0x34, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0]), "alloc": 0, "dir": "none"},  # LBA=0 len=1
     {"op": 0x36, "name": "LOCK/UNLOCK CACHE", "cat": "SPC", "cdb": bytes([0x36, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none"},
     {"op": 0x4C, "name": "LOG SENSE", "cat": "SPC", "cdb": bytes([0x4C, 0, 0x00, 0, 0, 0, 0, 0, 0xFF, 0xFF]), "alloc": 4096, "dir": "in"},
-    {"op": 0xA3, "name": "MAINTENANCE IN (RSOC)", "cat": "SPC", "cdb": bytes([0xA3, 0x0C, 0, 0, 0, 0, 0, 0, 0x10, 0x00, 0, 0]), "alloc": 4096, "dir": "in", "rsoc": True},  # SPC-3 SA=0x0C REPORT SUPPORTED OPERATION CODES — drive reports its own opcode list (shares opcode with MMC-6 SEND KEY; distinguished by service action)
+    {"op": 0xA3, "name": "MAINTENANCE IN (RSOC)", "cat": "SPC", "cdb": bytes([0xA3, 0x0C, 0, 0, 0, 0, 0x10, 0x00, 0, 0, 0, 0]), "alloc": 4096, "dir": "in", "rsoc": True},  # SPC-3 SA=0x0C REPORT SUPPORTED OPERATION CODES — allocation length at bytes 6-7 = 0x1000 (was at 8-9, alloc=0); drive reports its own opcode list (shares opcode with MMC-6 SEND KEY; distinguished by service action)
 
     # ---- MMC optical commands (all disc formats, MMC-6 rev 2g) ----
     {"op": 0x23, "name": "READ FORMAT CAPACITIES", "cat": "MMC", "cdb": bytes([0x23, 0, 0, 0, 0, 0, 0x00, 0xFF, 0, 0]), "alloc": 255, "dir": "in"},
