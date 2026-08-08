@@ -131,6 +131,11 @@ check("all 'out' commands carry alloc > 0 or runtime override",
       str([hex(c["op"]) for c in op.CMDS if c.get("dir") == "out" and c["alloc"] == 0]))
 check("0xA0 is REPORT LUNS (was wrongly REPORT KEY)",
       next(c for c in op.CMDS if c["op"] == 0xA0)["name"] == "REPORT LUNS")
+rl = next(c for c in op.CMDS if c["op"] == 0xA0)
+check("0xA0 REPORT LUNS 12-byte CDB with alloc at bytes 6-7 = 0x0010",
+      rl["cdb"] == bytes([0xA0, 0, 0, 0, 0, 0, 0x00, 0x10, 0, 0, 0, 0])
+      and len(rl["cdb"]) == 12 and rl["cdb"][6:8] == (0x0010).to_bytes(2, "big") and rl["alloc"] == 16,
+      rl["cdb"].hex())
 check("0xA2 is SECURITY PROTOCOL IN (was wrongly SEND KEY)",
       next(c for c in op.CMDS if c["op"] == 0xA2)["name"] == "SECURITY PROTOCOL IN")
 check("0xA3 is MAINTENANCE IN (RSOC, SPC-3 SA=0x0C, 12-byte CDB)",

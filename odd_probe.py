@@ -216,7 +216,7 @@ CMDS = [
     {"op": 0x4B, "name": "PAUSE/RESUME", "cat": "MMC", "cdb": bytes([0x4B, 0, 0, 0, 0, 0, 0, 0, 0x00, 0]), "alloc": 0, "dir": "none", "legacy": True},  # resume=0 -> pause; Annex E
     {"op": 0x51, "name": "READ DISC INFORMATION", "cat": "MMC", "cdb": bytes([0x51, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), "alloc": 65535, "dir": "in"},
     {"op": 0x52, "name": "READ TRACK INFORMATION", "cat": "MMC", "cdb": bytes([0x52, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), "alloc": 65535, "dir": "in"},
-    {"op": 0xA0, "name": "REPORT LUNS", "cat": "MMC", "cdb": bytes([0xA0, 0, 0, 0, 0x00, 0x10]), "alloc": 16, "dir": "in"},  # MMC-6 6.29 (was wrongly labeled REPORT KEY)
+    {"op": 0xA0, "name": "REPORT LUNS", "cat": "MMC", "cdb": bytes([0xA0, 0, 0, 0, 0, 0, 0x00, 0x10, 0, 0, 0, 0]), "alloc": 16, "dir": "in"},  # SPC-3 12-byte REPORT LUNS — allocation length at bytes 6-7 = 0x0010 (was a malformed 6-byte CDB)
     {"op": 0xA2, "name": "SECURITY PROTOCOL IN", "cat": "MMC", "cdb": bytes([0xA2, 0x06, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0, 0]), "alloc": 16, "dir": "in"},  # protocol 06h OSSC (6.32); was wrongly labeled SEND KEY
     {"op": 0xA4, "name": "REPORT KEY", "cat": "MMC", "cdb": bytes([0xA4, 0, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x08, 0, 0]), "alloc": 8, "dir": "in"},  # key class 0
     {"op": 0xAC, "name": "GET PERFORMANCE", "cat": "MMC", "cdb": bytes([0xAC, 0, 0x00, 0, 0, 0, 0, 0, 0x00, 0x01, 0, 0, 0x00, 0x20, 0, 0]), "alloc": 32, "dir": "in"},
