@@ -269,6 +269,12 @@ MIT（依專案管理決定；本倉庫初始提交未含授權檔）。
 
 ## 📦 版本與 Release
 
+### v1.3.0 (2026-08-08)
+- **P0 修復**（2026-08-08 code review）：READ CD (0xBE) block-type 矩陣 CDB 錯位（byte 6 Transfer Length MSB / byte 9 Main Channel Selection）與 Expected Sector Type 規格表誤植、RSOC (0xA3) allocation length 移至 bytes 6-7、REPORT LUNS (0xA0) 改為 12-byte CDB、GET CONFIGURATION Linux resid 截斷（消除零填充假 feature）、READ CAPACITY block_len clamp（0xFFFFFFFF 不再 MemoryError）、GUI --dangerous 確認文案對齊引擎真實行為（BLANK 抹碟 / FORMAT / CLOSE TRACK/SESSION / WRITE / 彈 tray）
+- **P1 修復**：GET PERFORMANCE (0xAC) 12-byte、START STOP UNIT (0x1B) START bit 修正、PLAY AUDIO 10 (0x45) TL=1、WRITE BUFFER (0x3B) paramlen=8、READ MEDIA SERIAL (0xAB) alloc=0x80、sense descriptor format (0x72/0x73) 分類、CHECK CONDITION 空 sense 補發 REQUEST SENSE、Windows alloc 縮至 4096、scsi_execute OSError 捕捉保留結果
+- **測試強化**：新增 byte-exact CDB 黃金向量測試（P0-1/2/3 漏網主因）＋ resid 截斷 / descriptor sense / block_len clamp / 中途 OSError 等覆蓋
+- **版本同步**：report_html TOOL_VERSION 與 version_info.txt（exe 版本資源）對齊 v1.3.0
+
 ### v1.2.1 (2026-08-08)
 - **MMC-4 gap closure**：指令矩陣 59 → **69** opcodes，新增 10 指令（MMC-4 未收錄、legacy 碟機仍常見）：
   - SPC 區塊 5 個：REZERO UNIT (0x01)、RESERVE 6 (0x16)、PREFETCH 10 (0x34)、LOCK/UNLOCK CACHE (0x36)、LOG SENSE (0x4C)
