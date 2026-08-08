@@ -679,16 +679,17 @@ def _read_toc_first_track_msf(dev, timeout_s):
     """READ TOC (0x43, format 0) -> ((m, s, f) of the first track's start
     LBA, first track number), or None on any failure (no TOC / no media /
     unparseable data). Format 0 track descriptors start at response byte 4,
-    one per 8 bytes (MMC-6 Table 476): [0]=ADR/Control, [1]=track number,
-    [2..5]=reserved, [6..9]=start address (LBA, big-endian)."""
+    one per 8 bytes (MMC-6 Table 476): [0]=Reserved, [1]=ADR/Control,
+    [2]=Track Number, [3]=Reserved, [4..7]=Track Start Address (LBA,
+    big-endian) -> absolute bytes 8-11 for the first descriptor."""
     status, sense, data, err = _scsi_execute_rescued(
-        dev, bytes([0x43, 0, 0, 0x00, 0, 0x00, 0x10, 0x00, 0]), 4096, timeout_s)
-    if err or status != 0x00 or len(data) < 14:
+        dev, bytes([0x43, 0, 0, 0x00, 0, 0x00, 0x10, 0x00, 0, 0]), 4096, timeout_s)
+    if err or status != 0x00 or len(data) < 12:  # 4-byte header + one 8-byte descriptor
         return None
     first, last = data[2], data[3]
     if first == 0 or last == 0 or first > last:
         return None
-    lba = int.from_bytes(data[10:14], "big")
+    lba = int.from_bytes(data[8:12], "big")
     msf = _lba_to_msf(lba)
     if msf[0] > 255:  # garbage TOC: MSF must fit in the CDB's single bytes
         return None

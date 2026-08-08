@@ -809,12 +809,14 @@ print("== READ CD MSF (0xB9) media-aware TOC-derived MSF (P1-1) ==")
 check("_lba_to_msf(0) == (0,2,0)", op._lba_to_msf(0) == (0, 2, 0), str(op._lba_to_msf(0)))
 check("_lba_to_msf(150) == (0,4,0)", op._lba_to_msf(150) == (0, 4, 0), str(op._lba_to_msf(150)))
 check("_lba_to_msf(4500) == (1,2,0)", op._lba_to_msf(4500) == (1, 2, 0), str(op._lba_to_msf(4500)))
-# Format 0 TOC golden vector: first track 1, start LBA 0x00A0 (=160) -> MSF 0:4:10.
-# 10-byte descriptor (MMC-6 Table 334): [adr/ctl, track, reserved(4), start LBA(4)],
-# dlen = 0x000C = first/last(2) + one descriptor(10).
-fake_toc = b"\x00\x0c" + b"\x01\x01" + bytes([0x01, 0x01, 0, 0, 0, 0]) + (0x00A0).to_bytes(4, "big")
-toc_cdb = bytes([0x43, 0, 0, 0x00, 0, 0x00, 0x10, 0x00, 0])
-dyn_b9 = bytes([0xB9, 0x00, 0, 4, 10, 0, 5, 10, 0x00, 0x10, 0x00, 0])
+# Format 0 TOC golden vector (MMC-6 Table 476): 4-byte header (data length
+# 2 + first/last 2), then 8-byte descriptors from byte 4: [0]=Reserved,
+# [1]=ADR/Control, [2]=Track Number, [3]=Reserved, [4..7]=Start LBA (BE).
+# One descriptor: first track 1, start LBA 0x0096 (=150) -> MSF 0:4:0.
+fake_toc = (b"\x00\x0a" + b"\x01\x01" + bytes([0x00, 0x00, 0x01, 0x00])
+           + (0x0096).to_bytes(4, "big"))
+toc_cdb = bytes([0x43, 0, 0, 0x00, 0, 0x00, 0x10, 0x00, 0, 0])  # 10 bytes, matches CMDS 0x43
+dyn_b9 = bytes([0xB9, 0x00, 0, 4, 0, 0, 5, 0, 0x00, 0x10, 0x00, 0])
 fix_b9 = bytes([0xB9, 0x00, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x10, 0x00, 0])
 
 orig_exec_p11 = op.scsi_execute
@@ -829,20 +831,23 @@ try:
         return (0x00, b"", b"\x00" * max(alloc, 1), "")
     op.scsi_execute = toc_ok_exec
     msf, tn = op._read_toc_first_track_msf("/dev/fake", 1)
-    check("TOC parse: LBA 0x00A0 -> MSF (0,4,10), track 1",
-          msf == (0, 4, 10) and tn == 1, f"msf={msf} track={tn}")
-    check("TOC parse: READ TOC CDB byte-exact, alloc 4096",
-          calls[0][0] == toc_cdb and calls[0][1] == 4096,
+    check("TOC parse: LBA 0x0096 (descriptor bytes 8-11) -> MSF (0,4,0), track 1",
+          msf == (0, 4, 0) and tn == 1, f"msf={msf} track={tn}")
+    check("TOC parse: READ TOC CDB byte-exact, 10 bytes, alloc 4096",
+          len(calls[0][0]) == 10 and calls[0][0] == toc_cdb and calls[0][1] == 4096,
           calls[0][0].hex() if calls else "no call")
+    check("TOC parse: CDB identical to CMDS 0x43 entry",
+          toc_cdb == next(c["cdb"] for c in op.CMDS if c["op"] == 0x43),
+          toc_cdb.hex())
     calls.clear()
     r = op.probe_device("/dev/fake", 1, False)
     b9_call = next(c for c in calls if c[0][0] == 0xB9)
     b9_entry = next(c for c in r["commands"] if c["opcode"] == "0xB9")
-    check("B9 with TOC: dynamic CDB byte-exact (0:4:10 -> 0:5:10)",
+    check("B9 with TOC: dynamic CDB byte-exact (0:4:0 -> 0:5:0)",
           b9_call[0] == dyn_b9, b9_call[0].hex())
     check("B9 with TOC: alloc stays 2352", b9_call[1] == 2352, str(b9_call[1]))
     check("B9 with TOC: detail carries TOC track marker",
-          "TOC track 1 MSF 0:4:10" in b9_entry["detail"], b9_entry["detail"])
+          "TOC track 1 MSF 0:4:0" in b9_entry["detail"], b9_entry["detail"])
     calls.clear()
     def toc_fail_exec(path, cdb, alloc, timeout_s, direction="in", out_data=b""):
         calls.append((bytes(cdb), alloc))
