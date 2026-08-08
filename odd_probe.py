@@ -66,7 +66,7 @@ import struct
 import sys
 import time
 
-__version__ = "1.4.0"  # v1.4.0: P0 spec fixes — RESERVE 10 / RELEASE 6/10 / VERIFY 12 + 0x56 relabel (MMC-6 Table 7 verified)
+__version__ = "1.5.0"  # v1.5.0: P1 series — media-aware READ CD MSF, DVD/BD structure matrices, sense-accurate classification, spec compatibility matrix
 
 # ---------------------------------------------------------------------------
 # SCSI constants

@@ -11,7 +11,8 @@ USB ODD（光碟機）SCSI command 支援度檢測工具 — 支援 CD / DVD / B
   - **INQUIRY**：Vendor / Product / Revision / Peripheral Device Type / Serial Number (EVPD 0x80)
   - **GET CONFIGURATION**：Current Profile、全部支援 Profile（含 current 標記）、Feature List（49 個內建對照）
   - **READ DISC INFORMATION**：目前碟片 Disc Type（與 current profile 交叉比對）
-  - **指令矩陣**：72 個 opcode（MMC-6 Table 7 光碟指令探測覆蓋：mandatory/optional/legacy + SPC 繼承，含 MMC-4 gap closure 10 指令）逐指令判定支援度，外加 READ CD Table 600 Data Block Type 支援矩陣（10 種 block type）
+  - **指令矩陣**：71 個 opcode（MMC-6 Table 7 光碟指令探測覆蓋：mandatory/optional/legacy + SPC 繼承，含 MMC-4 gap closure 10 指令）逐指令判定支援度，外加 READ CD Table 600 Data Block Type 支援矩陣（10 種 block type）、READ DISC STRUCTURE DVD（26 格式）/ BD（7 格式）結構矩陣 = 共 **114 步**
+  - **Spec 相容性矩陣**（v1.5.0）：依 MMC-6 Table 7 期望指令集（13 個 profile）逐指令比對實測結果，輸出 PASS / FAIL / OPTIONAL / INFO 判定（CLI 文字 + HTML 報告）
 - 人類可讀輸出 + `--json` 機器可讀輸出（通過 `python3 -m json.tool` 驗證）
 - **雙模式**：預設 safe 模式（破壞性指令 SKIP）／ `--dangerous` 完整相容性測試模式（所有指令真實發送，見下方說明）
 
@@ -77,7 +78,7 @@ pythonw odd_probe_gui.py
 
 1. **掃描裝置** → 下拉選單列出候選裝置（Linux: `/dev/sg*` `/dev/sr*`；Windows: `\\.\CdRom*`），選取後「開始檢測」才會啟用
 2. 可選調整：`--dangerous` 完整相容性模式勾選（預設關閉；勾選時彈出確認警告，所有指令包含 BLANK / FORMAT / CLOSE TRACK / 彈 tray 皆真實發送）、Timeout（1-30 秒，預設 5）
-3. **開始檢測** → 背景執行緒執行完整探測，進度列顯示 `x/82`（72 個 opcode + 10 種 READ CD block type），UI 不凍結
+3. **開始檢測** → 背景執行緒執行完整探測，進度列顯示 `x/114`（71 opcodes + 10 READ CD block types + 26 DVD + 7 BD structure formats），UI 不凍結
 4. 結果分四頁顯示：
    - **裝置資訊**：Vendor / Product / Revision / Peripheral Type / Serial / Current Profile / Media Detected
    - **支援格式**：Profile 清單（current 標 `[*]`）+ Feature 清單
@@ -200,16 +201,20 @@ repo 在 WSL 檔案系統時，直接 `cmd.exe /c build.bat` 會遇到兩個坑�
 | 14 | — | Reserved | — |
 | 15 | — | NA Vendor Specific | — |
 
-工具對 code 0/1/2/3/8/9/10/11/12/13 各探測一次（READ CD 0xBE 因此不再出現在 opcode 矩陣中，由 block type 迴圈取代）；type 級分類：0x20（指令不存在）→ 整組 NOT_SUPPORTED，0x24/0x25（該 type 參數被拒）→ 該 type NOT_SUPPORTED，其餘同主矩陣判定邏輯。block type 結果**併入 summary 統計**並計入進度列（82 步）；JSON 輸出位於 `block_type_matrix`（每項含 `code` / `size` / `name` / `mandatory` / `result` / `detail` / `sense_hex`）。
+工具對 code 0/1/2/3/8/9/10/11/12/13 各探測一次（READ CD 0xBE 因此不再出現在 opcode 矩陣中，由 block type 迴圈取代）；type 級分類：0x20（指令不存在）→ 整組 NOT_SUPPORTED，0x24/0x25（該 type 參數被拒）→ 該 type NOT_SUPPORTED，其餘同主矩陣判定邏輯。block type 結果**併入 summary 統計**並計入進度列（114 步）；JSON 輸出位於 `block_type_matrix`（每項含 `code` / `size` / `name` / `mandatory` / `result` / `detail` / `sense_hex`）。
+
+DVD / BD 同理：READ DISC STRUCTURE (0xAD) 以 media type 0x00（DVD，26 格式碼）與 0x01（BD，7 格式碼）各發一輪探測（MMC-6 §6.22.3），結果位於 `dvd_structure_matrix` / `bd_structure_matrix`，同 block type 併入 summary 並計入 114 步。
 
 ## 指令矩陣分類
 
 | 類別 | 數量 | 說明 |
 | --- | --- | --- |
 | SPC | 25 | SCSI Primary Commands 基礎（INQUIRY、MODE SENSE、READ 10、LOG SENSE、LOCK/UNLOCK CACHE、RESERVE/RELEASE 6/10、VERIFY 10/12 等） |
-| MMC | 24 | 光碟媒體指令（GET CONFIGURATION、READ DISC INFORMATION、REPORT LUNS、SECURITY PROTOCOL IN、READ/WRITE 12、MECHANISM STATUS 等；READ CD 以 block type 矩陣另行探測） |
+| MMC | 23 | 光碟媒體指令（GET CONFIGURATION、READ DISC INFORMATION、REPORT LUNS、SECURITY PROTOCOL IN、READ/WRITE 12、MECHANISM STATUS 等；READ CD 以 block type 矩陣另行探測） |
 | DANGEROUS | 23 | 寫入/破壞性類（BLANK、FORMAT、WRITE、ERASE 10、LOG SELECT、STOP PLAY/SCAN、PLAY AUDIO 12、SCAN 等；僅 `--dangerous` 完整相容性模式時**真實發送**） |
 | READ CD block types | +10 | Table 600 每種 block type 各測一次（併入 summary） |
+| DVD structure formats | +26 | READ DISC STRUCTURE media type 0x00（MMC-6 §6.22.3）每種格式碼各測一次 |
+| BD structure formats | +7 | READ DISC STRUCTURE media type 0x01（MMC-6 §6.22.3）每種格式碼各測一次 |
 
 ### 判定邏輯
 
@@ -218,9 +223,25 @@ repo 在 WSL 檔案系統時，直接 `cmd.exe /c build.bat` 會遇到兩個坑�
 | ✅ SUPPORTED | status=GOOD；或 ILLEGAL_REQUEST 但 ASC≠0x20/0x00（參數被拒、指令存在）；UNIT ATTENTION；WRITE PROTECTED |
 | ❌ NOT_SUPPORTED | ILLEGAL_REQUEST + ASC=0x20 ASCQ=0x00（INVALID COMMAND OPERATION CODE） |
 | 💿 NEEDS_MEDIA | NOT READY + ASC=0x3A (MEDIUM NOT PRESENT) 或 0x04 (NOT READY) |
+| 🟡 PARAMETER_NOT_SUPPORTED | ILLEGAL_REQUEST 但非 INVALID COMMAND（opcode 存在、參數/媒體被拒） |
+| 🔴 MEDIA_STATE_INVALID | MEDIUM ERROR (0x03)：媒體存在但不可讀（如未 finalize） |
+| 🟡 NEEDS_RECORDED_MEDIA | BLANK CHECK (0x08/0x30)：媒體存在但尚未錄製 |
 | 🔒 SKIPPED | 危險指令未啟用、或永遠不可安全測試 |
 | ⏱️ TIMEOUT | ioctl 逾時（SG_IO 逾時回 EIO） |
 | ⚠️ OTHER | 其他 sense（附完整 sense hex） |
+
+## Spec 相容性矩陣（MMC-6 Table 7，v1.5.0）
+
+探測完成後，`evaluate_compatibility()` 以 MMC-6 Table 7 的期望指令集（**13 個 profile**：CD-ROM/R/CD-RW、DVD-ROM/R/RW/RAM/+R/+RW、BD-ROM/R/RE）逐指令比對實測結果，寫入 `result["compatibility"]`（CLI 文字報告新增「Spec Compatibility Matrix」區段、HTML 報告新增同名牌卡）：
+
+| Verdict | 判定 |
+| --- | --- |
+| ✅ PASS | 實測符合期望（MANDATORY 支援、或 NOT APPLICABLE 正確缺席） |
+| 🔴 FAIL | MANDATORY 指令實測 NOT_SUPPORTED（spec 違反） |
+| ⚪ OPTIONAL | 期望為 OPTIONAL — 任何結果皆合規 |
+| 🟡 INFO | 無法判定（media-dependent 結果、未探測、或 N 指令額外支援的加分能力） |
+
+profile 不在資料庫時（或無 current profile）不會誤判：前者顯示 `profile not in spec DB` 註記、後者不產生相容性區段。
 
 ## ⚠️ 測試模式與安全設計（v1.1.0，產品廠商導向）
 
@@ -258,7 +279,7 @@ repo 在 WSL 檔案系統時，直接 `cmd.exe /c build.bat` 會遇到兩個坑�
 
 ```bash
 python3 -m py_compile odd_probe.py odd_probe_gui.py   # 語法驗證
-python3 tests/test_odd_assertions.py                  # Logic Assertion（213 項，含 MMC-6 對齊回歸）
+python3 tests/test_odd_assertions.py                  # Logic Assertion（297 項，含 MMC-6 對齊回歸）
 python3 tests/test_odd_gui_logic.py                   # GUI 純邏輯測試（26 項，headless）
 xvfb-run -a python3 tests/gui_smoke.py                # GUI 實機 smoke（需顯示；headless 用 xvfb）
 ```
@@ -268,6 +289,14 @@ xvfb-run -a python3 tests/gui_smoke.py                # GUI 實機 smoke（需�
 MIT（依專案管理決定；本倉庫初始提交未含授權檔）。
 
 ## 📦 版本與 Release
+
+### v1.5.0 (2026-08-09)
+- **P1 series（spec 精確性，P1-1/2/3 全數完成）**：
+  - **P1-1 media-aware READ CD MSF (0xB9)**：以 TOC-derived MSF 動態填入 CDB，避免 lead-in 假陰性
+  - **P1-2 structure format matrices**：READ DISC STRUCTURE (0xAD) DVD 26 + BD 7 格式碼矩陣（MMC-6 §6.22.3）
+  - **P1-3a sense-accurate 結果分類**：新增 PARAMETER_NOT_SUPPORTED / MEDIA_STATE_INVALID / NEEDS_RECORDED_MEDIA
+  - **P1-3b/c spec compatibility matrix**：MMC-6 Table 7 EXPECTED_COMMANDS DB（13 profiles）+ `evaluate_compatibility()` 判定引擎 + CLI 文字 / HTML 報告整合（PASS/FAIL/OPTIONAL/INFO）
+- **計數同步**：CMDS 71（SPC 25 / MMC 23 / DANGEROUS 23）+ READ CD 10 + DVD 26 + BD 7 = **TOTAL_PROBE_STEPS 114**；assertion 297 項；version_info（exe 版本資源）同步 v1.5.0
 
 ### v1.4.0 (2026-08-08)
 - **P0 spec fixes（MMC-6 Table 7 交叉驗證）**：
