@@ -208,7 +208,7 @@ CMDS = [
     {"op": 0x42, "name": "READ SUBCHANNEL", "cat": "MMC", "cdb": bytes([0x42, 0, 0x40, 0x01, 0, 0, 0x00, 0x20, 0, 0]), "alloc": 32, "dir": "in", "legacy": True},  # Annex E
     {"op": 0x43, "name": "READ TOC/PMA/ATIP", "cat": "MMC", "cdb": bytes([0x43, 0, 0, 0x00, 0, 0x00, 0x10, 0x00, 0, 0]), "alloc": 4096, "dir": "in"},
     {"op": 0x44, "name": "READ HEADER", "cat": "MMC", "cdb": bytes([0x44, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x20]), "alloc": 32, "dir": "in", "legacy": True},  # Annex E
-    {"op": 0x45, "name": "PLAY AUDIO 10", "cat": "MMC", "cdb": bytes([0x45, 0, 0, 0, 0, 0, 0x00, 0x01, 0, 0]), "alloc": 0, "dir": "none", "legacy": True, "dangerous": True},  # real play in --dangerous
+    {"op": 0x45, "name": "PLAY AUDIO 10", "cat": "MMC", "cdb": bytes([0x45, 0, 0, 0, 0, 0, 0x00, 0x00, 0x01, 0]), "alloc": 0, "dir": "none", "legacy": True, "dangerous": True},  # 10-byte per SFF-8020i Table 72; TL at bytes 7-8 = 0x0001 (kernel cdrom_play_blk); real play in --dangerous
     {"op": 0x46, "name": "GET CONFIGURATION", "cat": "MMC", "cdb": bytes([0x46, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0]), "alloc": 65535, "dir": "in"},
     {"op": 0x47, "name": "PLAY AUDIO MSF", "cat": "MMC", "cdb": bytes([0x47, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "legacy": True, "dangerous": True},
     {"op": 0x48, "name": "PLAY AUDIO TRACK INDEX", "cat": "MMC", "cdb": bytes([0x48, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none", "legacy": True, "dangerous": True},
