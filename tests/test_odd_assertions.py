@@ -38,10 +38,10 @@ print("== classify() ==")
 check("GOOD -> SUPPORTED", op.classify(0x00, b"", "") == ("SUPPORTED", "GOOD"))
 check("ILLEGAL_REQ 0x20/0x00 -> NOT_SUPPORTED",
       op.classify(0x02, s70(5, 0x20), "")[0] == "NOT_SUPPORTED")
-check("ILLEGAL_REQ 0x24 -> SUPPORTED (param rejected)",
-      op.classify(0x02, s70(5, 0x24), "")[0] == "SUPPORTED")
-check("ILLEGAL_REQ 0x25 -> SUPPORTED",
-      op.classify(0x02, s70(5, 0x25), "")[0] == "SUPPORTED")
+check("ILLEGAL_REQ 0x24 -> PARAMETER_NOT_SUPPORTED",
+      op.classify(0x02, s70(5, 0x24), "")[0] == "PARAMETER_NOT_SUPPORTED")
+check("ILLEGAL_REQ 0x25 -> PARAMETER_NOT_SUPPORTED",
+      op.classify(0x02, s70(5, 0x25), "")[0] == "PARAMETER_NOT_SUPPORTED")
 check("NOT_READY 0x3A -> NEEDS_MEDIA",
       op.classify(0x02, s70(2, 0x3A), "")[0] == "NEEDS_MEDIA")
 check("NOT_READY 0x04 -> NEEDS_MEDIA",
@@ -50,8 +50,12 @@ check("UNIT_ATTENTION -> SUPPORTED",
       op.classify(0x02, s70(6, 0x28), "")[0] == "SUPPORTED")
 check("WRITE_PROTECTED 0x27 -> SUPPORTED",
       op.classify(0x02, s70(7, 0x27), "")[0] == "SUPPORTED")
-check("MEDIUM_ERROR -> OTHER w/ sense hex",
-      op.classify(0x02, s70(3, 0x11), "")[0] == "OTHER")
+check("MEDIUM_ERROR 0x11 -> MEDIA_STATE_INVALID",
+      op.classify(0x02, s70(3, 0x11), "")[0] == "MEDIA_STATE_INVALID")
+check("BLANK CHECK 0x08/0x30 -> NEEDS_RECORDED_MEDIA",
+      op.classify(0x02, s70(8, 0x30), "")[0] == "NEEDS_RECORDED_MEDIA")
+check("BLANK CHECK detail carries key/asc/ascq",
+      "8/0x30/0x00" in op.classify(0x02, s70(8, 0x30), "")[1])
 check("status=0x08 -> OTHER",
       op.classify(0x08, b"", "")[0] == "OTHER")
 check("EIO errno=5 -> TIMEOUT",
@@ -60,9 +64,9 @@ check("EINVAL errno=22 -> OTHER",
       op.classify(0, b"", "ioctl error errno=22")[0] == "OTHER")
 check("empty sense + CHECK CONDITION -> OTHER",
       op.classify(0x02, b"\x00"*8, "")[0] == "OTHER")
-check("classify has exactly 11 return branches (matches docs)",
+check("classify has exactly 13 return branches (matches docs)",
       sum(1 for _ in __import__("inspect").getsourcelines(op.classify)[0]
-          if _.strip().startswith("return ")) == 11)
+          if _.strip().startswith("return ")) == 13)
 
 print("== sense: descriptor format 0x72/0x73 (P1-6, kernel scsi_normalize_sense) ==")
 check("_parse_sense fixed 0x70 (key byte 2, ASC/ASCQ 12/13)",
@@ -79,8 +83,8 @@ check("descriptor NOT_READY/0x3A -> NEEDS_MEDIA (was misjudged OTHER)",
       op.classify(0x02, s72(2, 0x3A), "")[0] == "NEEDS_MEDIA")
 check("descriptor ILLEGAL_REQ/0x20 -> NOT_SUPPORTED",
       op.classify(0x02, s72(5, 0x20), "")[0] == "NOT_SUPPORTED")
-check("descriptor ILLEGAL_REQ/0x24 -> SUPPORTED (param rejected)",
-      op.classify(0x02, s72(5, 0x24), "")[0] == "SUPPORTED")
+check("descriptor ILLEGAL_REQ/0x24 -> PARAMETER_NOT_SUPPORTED",
+      op.classify(0x02, s72(5, 0x24), "")[0] == "PARAMETER_NOT_SUPPORTED")
 check("descriptor UNIT ATTENTION -> SUPPORTED",
       op.classify(0x02, s72(6, 0x28), "")[0] == "SUPPORTED")
 check("descriptor block type ILLEGAL_REQ/0x24 -> type NOT_SUPPORTED",
@@ -582,7 +586,7 @@ def struct_exec(path, cdb, alloc, timeout_s, direction="in", out_data=b""):
     if media == 0x00 and fmt == 0x00:
         return (0x00, b"", b"\x00" * alloc, "")        # GOOD -> SUPPORTED
     if media == 0x00 and fmt == 0x05:
-        return (0x02, s72(5, 0x24), b"", "")            # ILLEGAL_REQ 0x24 -> SUPPORTED
+        return (0x02, s72(5, 0x24), b"", "")            # ILLEGAL_REQ 0x24 -> PARAMETER_NOT_SUPPORTED
     if media == 0x00 and fmt == 0x30:
         return (0x02, s72(2, 0x3A), b"", "")            # NOT_READY 0x3A -> NEEDS_MEDIA
     if media == 0x01 and fmt == 0x00:
@@ -596,8 +600,8 @@ try:
     check("dvd_structure_matrix 26 rows / bd_structure_matrix 7 rows",
           len(dv) == 26 and len(bm) == 7, f"{len(dv)}/{len(bm)}")
     check("DVD fmt 0x00 classified SUPPORTED", dv["0x00"]["result"] == "SUPPORTED", str(dv["0x00"]))
-    check("DVD fmt 0x05 classified SUPPORTED w/ sense_hex (0x24 param rejected)",
-          dv["0x05"]["result"] == "SUPPORTED" and dv["0x05"]["sense_hex"] == s72(5, 0x24).hex(" "),
+    check("DVD fmt 0x05 classified PARAMETER_NOT_SUPPORTED w/ sense_hex (0x24 param rejected)",
+          dv["0x05"]["result"] == "PARAMETER_NOT_SUPPORTED" and dv["0x05"]["sense_hex"] == s72(5, 0x24).hex(" "),
           str(dv["0x05"]))
     check("DVD fmt 0x30 classified NEEDS_MEDIA w/ sense_hex (0x3A)",
           dv["0x30"]["result"] == "NEEDS_MEDIA" and dv["0x30"]["sense_hex"] == s72(2, 0x3A).hex(" "),
@@ -610,6 +614,12 @@ try:
           all(row["name"] and row["media_type"] in (0x00, 0x01)
               for row in r["dvd_structure_matrix"] + r["bd_structure_matrix"])
           and sum(r["summary"].values()) == 114, str(r["summary"]))
+    check("summary has 9 result keys (P1-3a vocabulary)",
+          len(r["summary"]) == 9
+          and all(k in r["summary"] for k in ("PARAMETER_NOT_SUPPORTED",
+                                               "MEDIA_STATE_INVALID",
+                                               "NEEDS_RECORDED_MEDIA")),
+          str(r["summary"]))
     check("no 0xAD row in opcode matrix (replaced by structure loops)",
           all(c["opcode"] != "0xAD" for c in r["commands"]))
 finally:

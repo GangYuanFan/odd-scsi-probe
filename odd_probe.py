@@ -561,7 +561,18 @@ def _parse_sense(sense):
 
 
 def classify(status, sense, err_str):
-    """Map (status, sense, err) to a result label + human detail string."""
+    """Map (status, sense, err) to a result label + human detail string.
+
+    Result vocabulary (P1-3a): separates "command exists" from
+    "media/parameter compatibility":
+      * PARAMETER_NOT_SUPPORTED - ILLEGAL REQUEST but not INVALID COMMAND
+        OPERATION CODE (0x20): opcode exists, this parameter/media combo
+        rejected (e.g. 0x24 INVALID FIELD IN CDB, 0x25 LBA OUT OF RANGE)
+      * MEDIA_STATE_INVALID - MEDIUM ERROR (0x03): media unreadable in
+        current state (lead-in / blank area reads)
+      * NEEDS_RECORDED_MEDIA - BLANK CHECK (0x08/0x30): media present but
+        blank, command needs recorded data
+    """
     if err_str:
         # SG_IO aborts after hdr.timeout and returns EIO (5); ETIMEDOUT (110) too
         if "errno=5" in err_str or "errno=110" in err_str:
@@ -586,9 +597,13 @@ def classify(status, sense, err_str):
     if key == 0x05:  # ILLEGAL_REQUEST
         if asc == 0x20 and ascq == 0x00:
             return "NOT_SUPPORTED", brief  # INVALID COMMAND OPERATION CODE
-        return "SUPPORTED", brief            # opcode exists, parameters rejected
+        return "PARAMETER_NOT_SUPPORTED", brief  # opcode exists, params/media rejected
     if key == 0x02 and asc in (0x3A, 0x04):
         return "NEEDS_MEDIA", brief
+    if key == 0x03:  # MEDIUM ERROR (lead-in / blank area reads)
+        return "MEDIA_STATE_INVALID", brief
+    if key == 0x08 and asc == 0x30:  # BLANK CHECK: media blank, needs recorded data
+        return "NEEDS_RECORDED_MEDIA", brief
     if key == 0x06:  # UNIT ATTENTION (media change) -> command exists
         return "SUPPORTED", brief
     if key == 0x07 and asc == 0x27:  # WRITE PROTECTED
@@ -605,7 +620,7 @@ def classify_cd_block_type(status, sense, err_str):
     though the opcode exists (other types may still be SUPPORTED).
     """
     label, detail = classify(status, sense, err_str)
-    if label == "SUPPORTED":
+    if label in ("SUPPORTED", "PARAMETER_NOT_SUPPORTED"):
         key, asc, _ascq = _parse_sense(sense)
         if key == 0x05 and asc in (0x24, 0x25):
             return "NOT_SUPPORTED", detail
@@ -968,6 +983,8 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
                 cache[op] = classify(rc_status, rc_sense, rc_err)
 
     summary = {"SUPPORTED": 0, "NOT_SUPPORTED": 0, "NEEDS_MEDIA": 0,
+               "PARAMETER_NOT_SUPPORTED": 0, "MEDIA_STATE_INVALID": 0,
+               "NEEDS_RECORDED_MEDIA": 0,
                "SKIPPED": 0, "TIMEOUT": 0, "OTHER": 0}
     for idx, cmd in enumerate(CMDS):
         if progress_cb:
@@ -1100,6 +1117,8 @@ def format_human(r):
     lines.append(f"  {'Opcode':<8}{'Name':<34}{'Category':<11}{'Result':<14}Detail")
     for c in r["commands"]:
         icon = {"SUPPORTED": "✅", "NOT_SUPPORTED": "❌", "NEEDS_MEDIA": "💿",
+                "PARAMETER_NOT_SUPPORTED": "🟡", "MEDIA_STATE_INVALID": "🔴",
+                "NEEDS_RECORDED_MEDIA": "🟡",
                 "SKIPPED": "🔒", "TIMEOUT": "⏱️", "OTHER": "⚠️"}.get(c["result"], "?")
         lines.append(f"  {c['opcode']:<8}{c['name']:<34}{c['category']:<11}{icon + ' ' + c['result']:<14} {c['detail']}")
     if r.get("block_type_matrix"):
@@ -1108,6 +1127,8 @@ def format_human(r):
         lines.append(f"  {'Code':<6}{'Size':<7}{'Type':<50}Result")
         for bt in r["block_type_matrix"]:
             icon = {"SUPPORTED": "✅", "NOT_SUPPORTED": "❌", "NEEDS_MEDIA": "💿",
+                    "PARAMETER_NOT_SUPPORTED": "🟡", "MEDIA_STATE_INVALID": "🔴",
+                    "NEEDS_RECORDED_MEDIA": "🟡",
                     "SKIPPED": "🔒", "TIMEOUT": "⏱️", "OTHER": "⚠️"}.get(bt["result"], "?")
             lines.append(f"  {bt['code']:<6}{bt['size']:<7}{bt['name']:<50}{icon} {bt['result']}")
     if r.get("dvd_structure_matrix"):
@@ -1116,6 +1137,8 @@ def format_human(r):
         lines.append(f"  {'Format':<8}{'Structure':<58}Result")
         for row in r["dvd_structure_matrix"]:
             icon = {"SUPPORTED": "✅", "NOT_SUPPORTED": "❌", "NEEDS_MEDIA": "💿",
+                    "PARAMETER_NOT_SUPPORTED": "🟡", "MEDIA_STATE_INVALID": "🔴",
+                    "NEEDS_RECORDED_MEDIA": "🟡",
                     "SKIPPED": "🔒", "TIMEOUT": "⏱️", "OTHER": "⚠️"}.get(row["result"], "?")
             lines.append(f"  {row['format']:<8}{row['name']:<58}{icon} {row['result']}")
     if r.get("bd_structure_matrix"):
@@ -1124,6 +1147,8 @@ def format_human(r):
         lines.append(f"  {'Format':<8}{'Structure':<58}Result")
         for row in r["bd_structure_matrix"]:
             icon = {"SUPPORTED": "✅", "NOT_SUPPORTED": "❌", "NEEDS_MEDIA": "💿",
+                    "PARAMETER_NOT_SUPPORTED": "🟡", "MEDIA_STATE_INVALID": "🔴",
+                    "NEEDS_RECORDED_MEDIA": "🟡",
                     "SKIPPED": "🔒", "TIMEOUT": "⏱️", "OTHER": "⚠️"}.get(row["result"], "?")
             lines.append(f"  {row['format']:<8}{row['name']:<58}{icon} {row['result']}")
     s = r["summary"]
