@@ -461,6 +461,35 @@ elif os.name != "posix":  # posix backend defined above; only guard exotic platf
 # ---------------------------------------------------------------------------
 # Sense classification
 # ---------------------------------------------------------------------------
+def _sense_is_invalid(sense):
+    """True when a CHECK CONDITION arrived without usable sense data: too
+    short, or the response code is not a valid fixed/descriptor format
+    (kernel scsi_sense_valid: (sense[0] & 0x70) == 0x70)."""
+    return len(sense) < 2 or (sense[0] & 0x70) != 0x70
+
+
+def _parse_sense(sense):
+    """Normalize a sense buffer into (key, asc, ascq) per Linux
+    drivers/scsi/scommon.c scsi_normalize_sense() (P1-6):
+      * descriptor format (response code >= 0x72, e.g. 0x72/0x73):
+        key at byte 1 bits 3-0, ASC/ASCQ at bytes 2/3 (additional length
+        at byte 7)
+      * fixed format (0x70/0x71): key at byte 2 bits 3-0, ASC/ASCQ at
+        bytes 12/13, clamped by the additional length field (byte 7 + 8)
+    Returns (0, 0, 0) for invalid/empty sense data."""
+    if _sense_is_invalid(sense):
+        return 0, 0, 0
+    response_code = sense[0] & 0x7F
+    if response_code >= 0x72:  # descriptor format
+        return sense[1] & 0x0F, sense[2], sense[3]
+    # fixed format (0x70/0x71)
+    key = sense[2] & 0x0F
+    total = min(len(sense), sense[7] + 8) if len(sense) > 7 else len(sense)
+    asc = sense[12] if total > 12 else 0
+    ascq = sense[13] if total > 13 else 0
+    return key, asc, ascq
+
+
 def classify(status, sense, err_str):
     """Map (status, sense, err) to a result label + human detail string."""
     if err_str:
@@ -474,12 +503,10 @@ def classify(status, sense, err_str):
         return "OTHER", f"status=0x{status:02x} sense={sense.hex(' ')}"
 
     # CHECK CONDITION with invalid/empty sense data (e.g. some virtual devices)
-    if len(sense) < 2 or (sense[0] == 0 and sense[1] == 0):
+    if _sense_is_invalid(sense):
         return "OTHER", f"CHECK CONDITION, empty sense data sense={sense.hex(' ')}"
 
-    key = sense[2] & 0x0F if len(sense) > 2 else 0
-    asc = sense[12] if len(sense) > 12 else 0
-    ascq = sense[13] if len(sense) > 13 else 0
+    key, asc, ascq = _parse_sense(sense)
     key_name = SENSE_KEY_NAMES.get(key, f"key 0x{key:02x}")
     asc_name = ASC_NAMES.get(asc, "")
     brief = f"{key_name} ({key}/0x{asc:02x}/0x{ascq:02x})"
@@ -509,8 +536,7 @@ def classify_cd_block_type(status, sense, err_str):
     """
     label, detail = classify(status, sense, err_str)
     if label == "SUPPORTED":
-        key = sense[2] & 0x0F if len(sense) > 2 else 0
-        asc = sense[12] if len(sense) > 12 else 0
+        key, asc, _ascq = _parse_sense(sense)
         if key == 0x05 and asc in (0x24, 0x25):
             return "NOT_SUPPORTED", detail
     return label, detail

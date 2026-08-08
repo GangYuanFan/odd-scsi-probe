@@ -23,24 +23,35 @@ def check(name, cond, extra=""):
         failed += 1
         print(f"  ❌ {name} {extra}")
 
+
+def s70(key, asc, ascq=0):
+    """Fixed-format sense (0x70) with realistic additional length 10
+    (18-byte sense; kernel clamps ASC/ASCQ reads to sense[7]+8)."""
+    return bytes([0x70, 0, key, 0, 0, 0, 0, 0x0A, 0, 0, 0, 0, asc, ascq])
+
+
+def s72(key, asc, ascq=0):
+    """Descriptor-format sense (0x72) — key/ASC/ASCQ at bytes 1/2/3."""
+    return bytes([0x72, key, asc, ascq, 0, 0, 0, 0, 0x0A])
+
 print("== classify() ==")
 check("GOOD -> SUPPORTED", op.classify(0x00, b"", "") == ("SUPPORTED", "GOOD"))
 check("ILLEGAL_REQ 0x20/0x00 -> NOT_SUPPORTED",
-      op.classify(0x02, bytes([0x70,0,5,0,0,0,0,0,0,0,0,0,0x20,0x00]), "")[0] == "NOT_SUPPORTED")
+      op.classify(0x02, s70(5, 0x20), "")[0] == "NOT_SUPPORTED")
 check("ILLEGAL_REQ 0x24 -> SUPPORTED (param rejected)",
-      op.classify(0x02, bytes([0x70,0,5,0,0,0,0,0,0,0,0,0,0x24,0x00]), "")[0] == "SUPPORTED")
+      op.classify(0x02, s70(5, 0x24), "")[0] == "SUPPORTED")
 check("ILLEGAL_REQ 0x25 -> SUPPORTED",
-      op.classify(0x02, bytes([0x70,0,5,0,0,0,0,0,0,0,0,0,0x25,0x00]), "")[0] == "SUPPORTED")
+      op.classify(0x02, s70(5, 0x25), "")[0] == "SUPPORTED")
 check("NOT_READY 0x3A -> NEEDS_MEDIA",
-      op.classify(0x02, bytes([0x70,0,2,0,0,0,0,0,0,0,0,0,0x3A,0x00]), "")[0] == "NEEDS_MEDIA")
+      op.classify(0x02, s70(2, 0x3A), "")[0] == "NEEDS_MEDIA")
 check("NOT_READY 0x04 -> NEEDS_MEDIA",
-      op.classify(0x02, bytes([0x70,0,2,0,0,0,0,0,0,0,0,0,0x04,0x00]), "")[0] == "NEEDS_MEDIA")
+      op.classify(0x02, s70(2, 0x04), "")[0] == "NEEDS_MEDIA")
 check("UNIT_ATTENTION -> SUPPORTED",
-      op.classify(0x02, bytes([0x70,0,6,0,0,0,0,0,0,0,0,0,0x28,0x00]), "")[0] == "SUPPORTED")
+      op.classify(0x02, s70(6, 0x28), "")[0] == "SUPPORTED")
 check("WRITE_PROTECTED 0x27 -> SUPPORTED",
-      op.classify(0x02, bytes([0x70,0,7,0,0,0,0,0,0,0,0,0,0x27,0x00]), "")[0] == "SUPPORTED")
+      op.classify(0x02, s70(7, 0x27), "")[0] == "SUPPORTED")
 check("MEDIUM_ERROR -> OTHER w/ sense hex",
-      op.classify(0x02, bytes([0x70,0,3,0,0,0,0,0,0,0,0,0,0x11,0x00]), "")[0] == "OTHER")
+      op.classify(0x02, s70(3, 0x11), "")[0] == "OTHER")
 check("status=0x08 -> OTHER",
       op.classify(0x08, b"", "")[0] == "OTHER")
 check("EIO errno=5 -> TIMEOUT",
@@ -52,6 +63,34 @@ check("empty sense + CHECK CONDITION -> OTHER",
 check("classify has exactly 11 return branches (matches docs)",
       sum(1 for _ in __import__("inspect").getsourcelines(op.classify)[0]
           if _.strip().startswith("return ")) == 11)
+
+print("== sense: descriptor format 0x72/0x73 (P1-6, kernel scsi_normalize_sense) ==")
+check("_parse_sense fixed 0x70 (key byte 2, ASC/ASCQ 12/13)",
+      op._parse_sense(s70(5, 0x20)) == (5, 0x20, 0x00), str(op._parse_sense(s70(5, 0x20))))
+check("_parse_sense descriptor 0x72 (key byte 1, ASC/ASCQ 2/3)",
+      op._parse_sense(s72(2, 0x3A)) == (2, 0x3A, 0x00), str(op._parse_sense(s72(2, 0x3A))))
+check("_parse_sense descriptor 0x73 deferred format",
+      op._parse_sense(bytes([0x73, 0x05, 0x20, 0x00, 0, 0, 0, 0, 0x0A])) == (5, 0x20, 0x00))
+check("_parse_sense invalid: empty", op._parse_sense(b"") == (0, 0, 0))
+check("_parse_sense invalid: response 0x00", op._parse_sense(b"\x00" * 8) == (0, 0, 0))
+check("_parse_sense invalid: vendor response 0x50",
+      op._parse_sense(bytes([0x50, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x20, 0])) == (0, 0, 0))
+check("descriptor NOT_READY/0x3A -> NEEDS_MEDIA (was misjudged OTHER)",
+      op.classify(0x02, s72(2, 0x3A), "")[0] == "NEEDS_MEDIA")
+check("descriptor ILLEGAL_REQ/0x20 -> NOT_SUPPORTED",
+      op.classify(0x02, s72(5, 0x20), "")[0] == "NOT_SUPPORTED")
+check("descriptor ILLEGAL_REQ/0x24 -> SUPPORTED (param rejected)",
+      op.classify(0x02, s72(5, 0x24), "")[0] == "SUPPORTED")
+check("descriptor UNIT ATTENTION -> SUPPORTED",
+      op.classify(0x02, s72(6, 0x28), "")[0] == "SUPPORTED")
+check("descriptor block type ILLEGAL_REQ/0x24 -> type NOT_SUPPORTED",
+      op.classify_cd_block_type(0x02, s72(5, 0x24), "")[0] == "NOT_SUPPORTED")
+check("descriptor block type NEEDS_MEDIA kept",
+      op.classify_cd_block_type(0x02, s72(2, 0x3A), "")[0] == "NEEDS_MEDIA")
+check("fixed-format detail still carries key/asc/ascq",
+      "5/0x20/0x00" in op.classify(0x02, s70(5, 0x20), "")[1])
+check("descriptor-format detail carries key/asc/ascq",
+      "5/0x20/0x00" in op.classify(0x02, s72(5, 0x20), "")[1])
 
 print("== parse_inquiry() ==")
 inq = bytearray(36)
@@ -352,15 +391,15 @@ check("row 10 (form 2 + sub-header) CDB (byte1=0x14, byte9=0x50)",
       op._read_cd_cdb(10)[1] == 0x14 and op._read_cd_cdb(10)[9] == 0x50)
 check("row 3 (P-W pack) CDB (byte9=0xF8, byte10=0x02)",
       op._read_cd_cdb(3)[9] == 0xF8 and op._read_cd_cdb(3)[10] == 0x02)
-bt24 = bytes([0x70, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x24, 0x00])
+bt24 = s70(5, 0x24)
 check("block type 0x24 -> type NOT_SUPPORTED",
       op.classify_cd_block_type(0x02, bt24, "")[0] == "NOT_SUPPORTED")
 check("block type 0x25 -> type NOT_SUPPORTED",
-      op.classify_cd_block_type(0x02, bytes([0x70, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x25, 0x00]), "")[0] == "NOT_SUPPORTED")
+      op.classify_cd_block_type(0x02, s70(5, 0x25), "")[0] == "NOT_SUPPORTED")
 check("block type 0x20 -> NOT_SUPPORTED (no such command)",
-      op.classify_cd_block_type(0x02, bytes([0x70, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x20, 0x00]), "")[0] == "NOT_SUPPORTED")
+      op.classify_cd_block_type(0x02, s70(5, 0x20), "")[0] == "NOT_SUPPORTED")
 check("block type NEEDS_MEDIA kept",
-      op.classify_cd_block_type(0x02, bytes([0x70, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3A, 0x00]), "")[0] == "NEEDS_MEDIA")
+      op.classify_cd_block_type(0x02, s70(2, 0x3A), "")[0] == "NEEDS_MEDIA")
 check("block type GOOD -> SUPPORTED", op.classify_cd_block_type(0x00, b"", "")[0] == "SUPPORTED")
 
 print("== sector size / READ 10 dynamic allocation (PM requirement) ==")
@@ -387,7 +426,7 @@ def make_exec(rc_block_size=None):
         calls.append((bytes(cdb), alloc, direction))
         if cdb[0] == 0x25:
             if rc_block_size is None:
-                return (0x02, bytes([0x70, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x20, 0x00]), b"", "")
+                return (0x02, s70(5, 0x20), b"", "")
             return (0x00, b"", (0).to_bytes(4, "big") + rc_block_size.to_bytes(4, "big"), "")
         return (0x00, b"", b"\x00" * max(alloc, 1), "")
     return exec_, calls
