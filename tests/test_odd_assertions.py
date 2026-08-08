@@ -189,6 +189,11 @@ check("0xA3 is MAINTENANCE IN (RSOC, SPC-3 SA=0x0C, 12-byte CDB)",
       and next(c for c in op.CMDS if c["op"] == 0xA3)["rsoc"] is True
       and len(next(c for c in op.CMDS if c["op"] == 0xA3)["cdb"]) == 12,
       str(next(c for c in op.CMDS if c["op"] == 0xA3)))
+gp = next(c for c in op.CMDS if c["op"] == 0xAC)
+check("0xAC GET PERFORMANCE 12-byte CDB (MMC-6 Table 290: Max Descriptors bytes 8-9 = 0x0001, Type byte 10 = 0x00)",
+      gp["cdb"] == bytes([0xAC, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0x00, 0])
+      and len(gp["cdb"]) == 12 and gp["cdb"][8:10] == (0x0001).to_bytes(2, "big") and gp["cdb"][10] == 0x00,
+      gp["cdb"].hex())
 check("12-byte CDBs (A8/AA/AB/BD) have len==12",
       all(len(next(c for c in op.CMDS if c["op"] == opc)["cdb"]) == 12 for opc in (0xA8, 0xAA, 0xAB, 0xBD)))
 check("16-byte CDBs (A2/A3/B5/A4) have len==16",

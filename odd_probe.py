@@ -219,7 +219,7 @@ CMDS = [
     {"op": 0xA0, "name": "REPORT LUNS", "cat": "MMC", "cdb": bytes([0xA0, 0, 0, 0, 0, 0, 0x00, 0x10, 0, 0, 0, 0]), "alloc": 16, "dir": "in"},  # SPC-3 12-byte REPORT LUNS — allocation length at bytes 6-7 = 0x0010 (was a malformed 6-byte CDB)
     {"op": 0xA2, "name": "SECURITY PROTOCOL IN", "cat": "MMC", "cdb": bytes([0xA2, 0x06, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0, 0]), "alloc": 16, "dir": "in"},  # protocol 06h OSSC (6.32); was wrongly labeled SEND KEY
     {"op": 0xA4, "name": "REPORT KEY", "cat": "MMC", "cdb": bytes([0xA4, 0, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x08, 0, 0]), "alloc": 8, "dir": "in"},  # key class 0
-    {"op": 0xAC, "name": "GET PERFORMANCE", "cat": "MMC", "cdb": bytes([0xAC, 0, 0x00, 0, 0, 0, 0, 0, 0x00, 0x01, 0, 0, 0x00, 0x20, 0, 0]), "alloc": 32, "dir": "in"},
+    {"op": 0xAC, "name": "GET PERFORMANCE", "cat": "MMC", "cdb": bytes([0xAC, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0x00, 0]), "alloc": 32, "dir": "in"},  # MMC-6 Table 290: 12-byte CDB — Max Descriptors bytes 8-9 = 0x0001, Type byte 10 = 0x00 (was 16-byte with stray 0x20 tail),
     {"op": 0xAD, "name": "READ DVD STRUCTURE", "cat": "MMC", "cdb": bytes([0xAD, 0, 0x00, 0, 0, 0, 0, 0x00, 0x08, 0x00, 0, 0]), "alloc": 2048, "dir": "in"},  # format 0 = physical
     {"op": 0xA8, "name": "READ 12", "cat": "MMC", "cdb": bytes([0xA8, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0, 0]), "alloc": 0, "dir": "in"},  # LBA=0, len=1; alloc runtime
     {"op": 0xAB, "name": "READ MEDIA SERIAL NUMBER", "cat": "MMC", "cdb": bytes([0xAB, 0x01, 0, 0, 0, 0, 0, 0, 0, 0x80, 0, 0]), "alloc": 128, "dir": "in"},  # SERVICE ACTION IN (12) SA=01h
