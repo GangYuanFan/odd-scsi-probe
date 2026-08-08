@@ -222,7 +222,7 @@ CMDS = [
     {"op": 0xAC, "name": "GET PERFORMANCE", "cat": "MMC", "cdb": bytes([0xAC, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x01, 0x00, 0]), "alloc": 32, "dir": "in"},  # MMC-6 Table 290: 12-byte CDB — Max Descriptors bytes 8-9 = 0x0001, Type byte 10 = 0x00 (was 16-byte with stray 0x20 tail),
     {"op": 0xAD, "name": "READ DVD STRUCTURE", "cat": "MMC", "cdb": bytes([0xAD, 0, 0x00, 0, 0, 0, 0, 0x00, 0x08, 0x00, 0, 0]), "alloc": 2048, "dir": "in"},  # format 0 = physical
     {"op": 0xA8, "name": "READ 12", "cat": "MMC", "cdb": bytes([0xA8, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0, 0]), "alloc": 0, "dir": "in"},  # LBA=0, len=1; alloc runtime
-    {"op": 0xAB, "name": "READ MEDIA SERIAL NUMBER", "cat": "MMC", "cdb": bytes([0xAB, 0x01, 0, 0, 0, 0, 0, 0, 0, 0x80, 0, 0]), "alloc": 128, "dir": "in"},  # SERVICE ACTION IN (12) SA=01h
+    {"op": 0xAB, "name": "READ MEDIA SERIAL NUMBER", "cat": "MMC", "cdb": bytes([0xAB, 0x01, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x80, 0]), "alloc": 128, "dir": "in"},  # SERVICE ACTION IN (12) SA=01h; allocation length bytes 9-10 = 0x0080 (P1-5, was 0x8000=32768)
     {"op": 0xB9, "name": "READ CD MSF", "cat": "MMC", "cdb": bytes([0xB9, 0x00, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x10, 0x00, 0]), "alloc": 2352, "dir": "in"},  # MSF 0:0:0 -> 0:0:1, user data
     {"op": 0xBD, "name": "MECHANISM STATUS", "cat": "MMC", "cdb": bytes([0xBD, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x0C, 0, 0]), "alloc": 12, "dir": "in"},
     {"op": 0xBB, "name": "SET CD SPEED", "cat": "MMC", "cdb": bytes([0xBB, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0]), "alloc": 0, "dir": "none"},  # max speed

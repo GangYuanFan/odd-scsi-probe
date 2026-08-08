@@ -196,6 +196,11 @@ check("0xAC GET PERFORMANCE 12-byte CDB (MMC-6 Table 290: Max Descriptors bytes 
       gp["cdb"].hex())
 check("12-byte CDBs (A8/AA/AB/BD) have len==12",
       all(len(next(c for c in op.CMDS if c["op"] == opc)["cdb"]) == 12 for opc in (0xA8, 0xAA, 0xAB, 0xBD)))
+rms = next(c for c in op.CMDS if c["op"] == 0xAB)
+check("0xAB READ MEDIA SERIAL alloc length bytes 9-10 = 0x0080 (P1-5, was 0x8000)",
+      rms["cdb"] == bytes([0xAB, 0x01, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x80, 0])
+      and rms["cdb"][9:11] == (0x0080).to_bytes(2, "big") and rms["alloc"] == 128,
+      rms["cdb"].hex())
 check("16-byte CDBs (A2/A3/B5/A4) have len==16",
       all(len(next(c for c in op.CMDS if c["op"] == opc)["cdb"]) == 16 for opc in (0xA2, 0xA4, 0xB5)))
 for opc in (0xA1, 0x5B, 0x56, 0x04, 0xA6, 0x47, 0x48):
