@@ -875,5 +875,101 @@ try:
 finally:
     op.scsi_execute = orig_exec_p11
 
+print("\n== P1-3b: EXPECTED_COMMANDS spec DB + evaluate_compatibility ==")
+# DB integrity: every key is a legal 0xXX opcode string, every value M/O/N/C
+_bad_key = [k for spec in op.EXPECTED_COMMANDS.values() for k in spec
+            if not (len(k) == 4 and k[:2] == "0x"
+                    and all(ch in "0123456789ABCDEF" for ch in k[2:]))]
+check("DB: every profile key is a legal 0x00-0xFF opcode string", not _bad_key, str(_bad_key[:3]))
+_bad_val = [v for spec in op.EXPECTED_COMMANDS.values() for v in spec.values()
+            if v not in "MONC"]
+check("DB: every expected value is M/O/N/C", not _bad_val, str(_bad_val[:3]))
+check("DB: all 13 logical profiles present",
+      {"CD-ROM", "CD-R", "CD-RW", "DVD-ROM", "DVD-R Sequential", "DVD-RW Restricted Overwrite",
+       "DVD-RAM", "DVD+R", "DVD+RW", "BD-ROM", "BD-R Sequential", "BD-R Random", "BD-RE"}
+      <= set(op.EXPECTED_COMMANDS))
+check("DB: DVD-RW Sequential shares the DVD-RW command set",
+      op.EXPECTED_COMMANDS["DVD-RW Sequential"] == op.EXPECTED_COMMANDS["DVD-RW Restricted Overwrite"])
+# spot-checks (10+ cells)
+_db = op.EXPECTED_COMMANDS
+check("DB: DVD-ROM 0x2A=N", _db["DVD-ROM"]["0x2A"] == "N")
+check("DB: DVD-ROM 0x28=M", _db["DVD-ROM"]["0x28"] == "M")
+check("DB: BD-R SRM 0x2A=M", _db["BD-R Sequential"]["0x2A"] == "M")
+check("DB: CD-ROM 0xA1=N", _db["CD-ROM"]["0xA1"] == "N")
+check("DB: DVD-RW 0xA1=M", _db["DVD-RW Restricted Overwrite"]["0xA1"] == "M")
+check("DB: DVD-RAM 0x04=M", _db["DVD-RAM"]["0x04"] == "M")
+check("DB: DVD+R 0xA1=N", _db["DVD+R"]["0xA1"] == "N")
+check("DB: BD-RE 0x04=M", _db["BD-RE"]["0x04"] == "M")
+check("DB: CD-RW 0xA1=M", _db["CD-RW"]["0xA1"] == "M")
+check("DB: BD-ROM 0xAD=M", _db["BD-ROM"]["0xAD"] == "M")
+check("DB: CD-R 0x51=M (READ DISC INFORMATION)", _db["CD-R"]["0x51"] == "M")
+check("DB: DVD-R Sequential 0xAD=M", _db["DVD-R Sequential"]["0xAD"] == "M")
+check("DB: BD-R RRM 0xA8=M (READ 12)", _db["BD-R Random"]["0xA8"] == "M")
+check("DB: CD-ROM 0x23=O (READ FORMAT CAPACITIES)", _db["CD-ROM"]["0x23"] == "O")
+check("DB: CD-RW 0x04=C (FORMAT UNIT conditional)", _db["CD-RW"]["0x04"] == "C")
+check("DB: DVD-RAM 0x53=O (RESERVE TRACK)", _db["DVD-RAM"]["0x53"] == "O")
+
+# evaluate_compatibility unit tests (hand-crafted result dicts)
+def _fake_result(profile, code, cmd_results, ad_result=None):
+    cmds = [{"opcode": op, "name": op, "category": "SPC",
+             "result": res, "detail": ""} for op, res in cmd_results.items()]
+    dvd = [] if ad_result is None else [{
+        "format": "0x00", "name": "Physical Format Information",
+        "media_type": 0, "result": ad_result, "detail": ""}]
+    return {"current_profile": code, "current_profile_name": profile,
+            "commands": cmds, "dvd_structure_matrix": dvd}
+
+def _row(compat, opcode):
+    return next(r for r in compat["rows"] if r["opcode"] == opcode)
+
+c = op.evaluate_compatibility(_fake_result("CD-ROM", 0x08, {"0x28": "SUPPORTED"}))
+check("M + SUPPORTED -> PASS", _row(c, "0x28")["verdict"] == "PASS")
+c = op.evaluate_compatibility(_fake_result("CD-ROM", 0x08, {"0x28": "NOT_SUPPORTED"}))
+check("M + NOT_SUPPORTED -> FAIL", _row(c, "0x28")["verdict"] == "FAIL")
+c = op.evaluate_compatibility(_fake_result("CD-ROM", 0x08, {"0x28": "NEEDS_MEDIA"}))
+check("M + NEEDS_MEDIA -> INFO", _row(c, "0x28")["verdict"] == "INFO")
+c = op.evaluate_compatibility(_fake_result("CD-ROM", 0x08, {"0x2A": "NOT_SUPPORTED"}))
+check("N + NOT_SUPPORTED -> PASS (correctly absent)", _row(c, "0x2A")["verdict"] == "PASS")
+c = op.evaluate_compatibility(_fake_result("CD-ROM", 0x08, {"0x2A": "SUPPORTED"}))
+check("N + SUPPORTED -> INFO (extra capability)", _row(c, "0x2A")["verdict"] == "INFO")
+c = op.evaluate_compatibility(_fake_result("CD-ROM", 0x08, {"0x3C": "SUPPORTED"}))
+check("O + anything -> OPTIONAL", _row(c, "0x3C")["verdict"] == "OPTIONAL")
+c = op.evaluate_compatibility(_fake_result("CD-ROM", 0x08, {"0x3C": "TIMEOUT"}))
+check("O + TIMEOUT -> OPTIONAL", _row(c, "0x3C")["verdict"] == "OPTIONAL")
+c = op.evaluate_compatibility(_fake_result("CD-RW", 0x0A, {"0x04": "SUPPORTED"}))
+check("C + SUPPORTED -> PASS (condition met)", _row(c, "0x04")["verdict"] == "PASS")
+c = op.evaluate_compatibility(_fake_result("CD-RW", 0x0A, {"0x04": "NOT_SUPPORTED"}))
+check("C + NOT_SUPPORTED -> INFO (condition not met)", _row(c, "0x04")["verdict"] == "INFO")
+c = op.evaluate_compatibility(_fake_result("CD-ROM", 0x08, {}))
+check("M + not probed -> INFO, actual=(not probed)",
+      _row(c, "0x28")["verdict"] == "INFO" and _row(c, "0x28")["actual"] == "(not probed)")
+# 0xAD substitution: not in commands[], judged via dvd_structure_matrix format 0x00
+c = op.evaluate_compatibility(_fake_result("DVD-ROM", 0x10, {"0x28": "SUPPORTED"}, ad_result="SUPPORTED"))
+check("0xAD via matrix fmt 0x00 + SUPPORTED -> PASS",
+      _row(c, "0xAD")["actual"] == "SUPPORTED" and _row(c, "0xAD")["verdict"] == "PASS")
+c = op.evaluate_compatibility(_fake_result("DVD-ROM", 0x10, {}, ad_result="NOT_SUPPORTED"))
+check("0xAD via matrix fmt 0x00 + NOT_SUPPORTED -> FAIL",
+      _row(c, "0xAD")["verdict"] == "FAIL")
+c = op.evaluate_compatibility(_fake_result("CD-ROM", 0x08, {}, ad_result="NOT_SUPPORTED"))
+check("CD-ROM 0xAD=N + matrix NOT_SUPPORTED -> PASS", _row(c, "0xAD")["verdict"] == "PASS")
+c = op.evaluate_compatibility(_fake_result("DVD-ROM", 0x10, {}))
+check("0xAD without matrix -> (not probed)/INFO",
+      _row(c, "0xAD")["actual"] == "(not probed)" and _row(c, "0xAD")["verdict"] == "INFO")
+# unknown profile / no profile
+c = op.evaluate_compatibility(
+    {"current_profile": 0x9999, "current_profile_name": "Mystery Drive",
+     "commands": [], "dvd_structure_matrix": []})
+check("unknown profile -> empty rows + 'profile not in spec DB' note",
+      c["rows"] == [] and c.get("note") == "profile not in spec DB"
+      and c["summary"] == {"PASS": 0, "FAIL": 0, "OPTIONAL": 0, "INFO": 0})
+check("no current profile -> None",
+      op.evaluate_compatibility({"current_profile_name": None, "commands": []}) is None)
+# verdict coverage + summary totals over a full CD-ROM row set
+c = op.evaluate_compatibility(_fake_result("CD-ROM", 0x08, {"0x28": "SUPPORTED", "0x2A": "NOT_SUPPORTED"},
+                                           ad_result="NOT_SUPPORTED"))
+check("summary counts sum to DB row count",
+      sum(c["summary"].values()) == len(op.EXPECTED_COMMANDS["CD-ROM"])
+      and c["summary"]["PASS"] >= 1 and c["summary"]["FAIL"] == 0)
+
 print(f"\nRESULT: {passed} passed / {failed} failed")
 sys.exit(1 if failed else 0)

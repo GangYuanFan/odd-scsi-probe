@@ -776,6 +776,211 @@ def name_peripheral(t):
     return PERIPHERAL_NAMES.get(t, "unknown")
 
 # ---------------------------------------------------------------------------
+# P1-3b — EXPECTED_COMMANDS: MMC-6 profile -> opcode expectation database
+# ---------------------------------------------------------------------------
+# Expected-value semantics (MMC-6 Table 7 command sets):
+#   "M" = MANDATORY        — the profile MUST support this command
+#   "O" = OPTIONAL         — the profile MAY support it
+#   "N" = NOT APPLICABLE   — the command does not belong to this profile
+#   "C" = CONDITIONAL      — support depends on media/feature state
+# Keys are opcode hex strings ("0x2A") so they join directly on the
+# result["commands"][]."opcode" fields produced by probe().
+
+def _spec_base():
+    """Commands required by every MMC-6 optical profile (Table 7 + SPC)."""
+    return {
+        "0x00": "M",  # TEST UNIT READY
+        "0x12": "M",  # INQUIRY
+        "0x25": "M",  # READ CAPACITY
+        "0x28": "M",  # READ 10
+        "0x46": "M",  # GET CONFIGURATION
+        "0x1B": "M",  # START STOP UNIT
+        "0x5A": "M",  # MODE SENSE 10
+        "0x43": "M",  # READ TOC/PMA/ATIP
+        "0xA6": "M",  # LOAD/UNLOAD MEDIUM
+        "0x3C": "O",  # READ BUFFER
+        "0x35": "O",  # SYNCHRONIZE CACHE
+        "0xAC": "O",  # GET PERFORMANCE
+        "0xB6": "O",  # SET STREAMING
+        "0xBB": "O",  # SET CD SPEED
+        "0x3B": "O",  # WRITE BUFFER
+    }
+
+def _spec_readonly(ad, read12):
+    """Read-only (-ROM) profile extras; 0xAD/0xA8 vary by disc family."""
+    return {
+        "0x51": "O",  # READ DISC INFORMATION
+        "0x52": "O",  # READ TRACK INFORMATION
+        "0xAD": ad,    # READ DISC STRUCTURE (M for DVD/BD-ROM, N for CD-ROM)
+        "0xA8": read12,  # READ 12 (M for DVD/BD-ROM, O for CD-ROM)
+        "0x2A": "N",  # WRITE 10
+        "0xAA": "N",  # WRITE 12
+        "0x2E": "N",  # WRITE AND VERIFY 10
+        "0xA1": "N",  # BLANK
+        "0x04": "N",  # FORMAT UNIT
+        "0x53": "N",  # RESERVE TRACK
+        "0x5B": "N",  # CLOSE TRACK/SESSION
+        "0x2F": "O",  # VERIFY 10
+        "0xAF": "O",  # VERIFY 12
+        "0x23": "O",  # READ FORMAT CAPACITIES
+    }
+
+def _spec_cd_writer(blank="N", format_unit="N"):
+    """CD-R/CD-RW recorder block (0xAD/0xA8 are DVD/BD-only -> absent)."""
+    return {
+        "0x2A": "M",  # WRITE 10
+        "0xAA": "O",  # WRITE 12
+        "0x2E": "O",  # WRITE AND VERIFY 10
+        "0x51": "M",  # READ DISC INFORMATION
+        "0x52": "M",  # READ TRACK INFORMATION
+        "0x23": "M",  # READ FORMAT CAPACITIES
+        "0x5B": "M",  # CLOSE TRACK/SESSION
+        "0x53": "O",  # RESERVE TRACK
+        "0xA1": blank,
+        "0x04": format_unit,
+        "0x2F": "O",  # VERIFY 10
+        "0xAF": "O",  # VERIFY 12
+    }
+
+def _spec_dvd_bd_writer(blank="N", format_unit="N", reserve_track="M"):
+    """DVD/BD recorder block (adds READ DISC STRUCTURE + READ 12)."""
+    return {
+        "0x2A": "M",  # WRITE 10
+        "0xAA": "O",  # WRITE 12
+        "0x2E": "O",  # WRITE AND VERIFY 10
+        "0x51": "M",  # READ DISC INFORMATION
+        "0x52": "M",  # READ TRACK INFORMATION
+        "0x23": "M",  # READ FORMAT CAPACITIES
+        "0x5B": "M",  # CLOSE TRACK/SESSION
+        "0x53": reserve_track,
+        "0xA1": blank,
+        "0x04": format_unit,
+        "0xAD": "M",  # READ DISC STRUCTURE
+        "0xA8": "M",  # READ 12
+        "0x2F": "O",  # VERIFY 10
+        "0xAF": "O",  # VERIFY 12
+    }
+
+# Profile keys are the exact PROFILE_NAMES strings reported by the drive
+# (MMC-6 profile codes). DVD-RW has two real profile strings (0x13 restricted
+# overwrite / 0x14 sequential) — both share the same command set, so both are
+# listed. BD-R SRM = "BD-R Sequential" (0x41), RRM = "BD-R Random" (0x42).
+EXPECTED_COMMANDS = {
+    "CD-ROM": {**_spec_base(), **_spec_readonly("N", "O")},
+    "DVD-ROM": {**_spec_base(), **_spec_readonly("M", "M")},
+    "BD-ROM": {**_spec_base(), **_spec_readonly("M", "M")},
+    "CD-R": {**_spec_base(), **_spec_cd_writer()},
+    "CD-RW": {**_spec_base(), **_spec_cd_writer(blank="M", format_unit="C")},
+    "DVD-R Sequential": {**_spec_base(), **_spec_dvd_bd_writer()},
+    "DVD-RW Restricted Overwrite": {**_spec_base(), **_spec_dvd_bd_writer(blank="M", format_unit="C")},
+    "DVD-RW Sequential": {**_spec_base(), **_spec_dvd_bd_writer(blank="M", format_unit="C")},
+    "DVD-RAM": {**_spec_base(), **_spec_dvd_bd_writer(format_unit="M", blank="C", reserve_track="O")},
+    "DVD+R": {**_spec_base(), **_spec_dvd_bd_writer()},
+    "DVD+RW": {**_spec_base(), **_spec_dvd_bd_writer(format_unit="M")},
+    "BD-R Sequential": {**_spec_base(), **_spec_dvd_bd_writer()},   # BD-R SRM
+    "BD-R Random": {**_spec_base(), **_spec_dvd_bd_writer()},       # BD-R RRM
+    "BD-RE": {**_spec_base(), **_spec_dvd_bd_writer(format_unit="M", blank="M")},
+}
+
+# Result labels that cannot prove PASS/FAIL for a mandatory/conditional row
+# (the drive answered, but the answer depends on media/parameters/state).
+_INDETERMINATE_LABELS = frozenset((
+    "NEEDS_MEDIA", "PARAMETER_NOT_SUPPORTED", "MEDIA_STATE_INVALID",
+    "NEEDS_RECORDED_MEDIA", "TIMEOUT", "OTHER", "SKIPPED",
+))
+
+# Opcodes in EXPECTED_COMMANDS that are not probed inside result["commands"]
+# (0xAD left CMDS for the §6.22.3 DVD/BD structure matrices — P1-2).
+_SPEC_FALLBACK_NAMES = {
+    "0xAD": "READ DISC STRUCTURE",
+}
+
+def _spec_verdict(expected, actual):
+    """Map (expected, actual) to a PASS/FAIL/OPTIONAL/INFO verdict string.
+
+    PASS  = drive proves the expected capability (or correctly lacks an N).
+    FAIL  = mandatory command missing.
+    OPTIONAL = expectation is optional — any outcome is compliant.
+    INFO  = cannot judge (indeterminate label, extra capability for N,
+            condition not met for C, or row not probed).
+    """
+    if expected == "M":
+        if actual == "SUPPORTED":
+            return "PASS"
+        if actual == "NOT_SUPPORTED":
+            return "FAIL"
+        return "INFO"
+    if expected == "N":
+        if actual == "NOT_SUPPORTED":
+            return "PASS"   # correctly absent
+        if actual == "SUPPORTED":
+            return "INFO"    # extra capability — not a violation
+        return "INFO"
+    if expected == "O":
+        return "OPTIONAL"
+    if expected == "C":
+        if actual == "SUPPORTED":
+            return "PASS"    # condition satisfied
+        if actual == "NOT_SUPPORTED":
+            return "INFO"    # condition not met — inconclusive
+        return "INFO"
+    return "INFO"  # unknown expectation value
+
+def evaluate_compatibility(result):
+    """Judge a probe result against the MMC-6 EXPECTED_COMMANDS spec DB.
+
+    Stores and returns result["compatibility"]:
+      {"profile": name, "profile_code": "0xXXXX", "rows": [...],
+       "summary": {"PASS": n, "FAIL": n, "OPTIONAL": n, "INFO": n}}
+    Unknown profile -> empty rows plus note "profile not in spec DB".
+    No current profile at all -> returns None (nothing to judge).
+    """
+    profile = result.get("current_profile_name")
+    if not profile:
+        result["compatibility"] = None
+        return None
+    compat = {
+        "profile": profile,
+        "profile_code": "0x%04x" % result.get("current_profile", 0),
+        "rows": [],
+        "summary": {"PASS": 0, "FAIL": 0, "OPTIONAL": 0, "INFO": 0},
+    }
+    spec = EXPECTED_COMMANDS.get(profile)
+    if spec is None:
+        compat["note"] = "profile not in spec DB"
+        result["compatibility"] = compat
+        return compat
+
+    cmds = {c.get("opcode"): c for c in result.get("commands", [])}
+    # 0xAD left CMDS for the DVD structure matrices: format 0x00 (Physical
+    # Format Information) is the canonical READ DISC STRUCTURE probe.
+    ad_actual = "(not probed)"
+    for row in result.get("dvd_structure_matrix", []):
+        if row.get("format") == "0x00":
+            ad_actual = row.get("result", "(not probed)")
+            break
+
+    for opcode, expected in spec.items():
+        entry = cmds.get(opcode)
+        if opcode == "0xAD":
+            name = _SPEC_FALLBACK_NAMES[opcode]
+            actual = ad_actual
+        elif entry is not None:
+            name = entry.get("name", opcode)
+            actual = entry.get("result", "(not probed)")
+        else:
+            name = _SPEC_FALLBACK_NAMES.get(opcode, "(unknown command)")
+            actual = "(not probed)"
+        verdict = _spec_verdict(expected, actual)
+        compat["rows"].append({
+            "opcode": opcode, "name": name,
+            "expected": expected, "actual": actual, "verdict": verdict,
+        })
+        compat["summary"][verdict] += 1
+    result["compatibility"] = compat
+    return compat
+
+# ---------------------------------------------------------------------------
 # Device discovery
 # ---------------------------------------------------------------------------
 def discover_devices():
@@ -1083,6 +1288,8 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
 
     result["summary"] = summary
     result["duration_sec"] = round(time.time() - t0, 2)
+    # P1-3b: judge the probed command matrix against the MMC-6 spec DB.
+    evaluate_compatibility(result)
     return result
 
 # ---------------------------------------------------------------------------
