@@ -721,7 +721,10 @@ def probe_device(dev, timeout_s, dangerous, progress_cb=None):
         dev, bytes([0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0]), 8, timeout_s)
     if not rc_err and rc_status == 0x00 and len(rc_data) >= 8:
         block_len = struct.unpack(">I", rc_data[4:8])[0]
-        if block_len > 0:
+        # P0-6: accept sane media sector sizes only (512..4096). Empty-media
+        # firmware sometimes reports 0xFFFFFFFF — treat as None (READ 10 / WRITE
+        # alloc falls back to 2352) instead of a 4 GB create_string_buffer.
+        if 512 <= block_len <= 4096:
             media_block_size = block_len
     result["media_block_size"] = media_block_size
     result["media_block_size_name"] = name_block_size(media_block_size)

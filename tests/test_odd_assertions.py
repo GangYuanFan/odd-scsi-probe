@@ -384,6 +384,17 @@ try:
     check("READ CAPACITY fail -> READ 10 alloc fallback 2352", alloc == 2352, str(alloc))
     check("no media -> media_block_size unknown", r["media_block_size"] is None
           and r["media_block_size_name"] == "unknown")
+    # P0-6: insane block lengths (empty-media 0xFFFFFFFF) must clamp to None,
+    # never allocate a 4 GB buffer; boundaries 512/4096 accepted.
+    for bs, want in ((0xFFFFFFFF, None), (511, None), (4097, None), (512, 512), (4096, 4096)):
+        exec_, calls = make_exec(bs)
+        op.scsi_execute = exec_
+        r = op.probe_device("/dev/fake", 1, False)
+        alloc = next(c for c in calls if c[0][0] == 0x28)[1]
+        check(f"block_len 0x{bs:08X} -> media_block_size={want} (P0-6 clamp)",
+              r["media_block_size"] == want, str(r["media_block_size"]))
+        check(f"block_len 0x{bs:08X} -> READ 10 alloc fallback {'2352' if want is None else want}",
+              alloc == (2352 if want is None else want), str(alloc))
     exec_, calls = make_exec(2048)
     op.scsi_execute = exec_
     r = op.probe_device("/dev/fake", 1, False)
