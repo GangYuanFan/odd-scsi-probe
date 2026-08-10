@@ -266,9 +266,35 @@ class OddProbeApp(tk.Tk):
             self.device_var.set("")
             self._on_device_selected()
             return
-        self.device_cb["values"] = devs
-        self.device_var.set(devs[0])
-        self.status_var.set(f"找到 {len(devs)} 個候選裝置：{devs[0]} ...")
+        # 對每個裝置做快速 INQUIRY，只保留 ODD 裝置（peripheral type 0x05）
+        self.status_var.set("正在識別 ODD 裝置...")
+        odd_devs = []
+        for dev in devs:
+            try:
+                info, ok, err = odd_probe.inquiry(dev, 2)  # 2s timeout per device
+                if ok and info and info.get("peripheral_type") == 0x05:
+                    odd_devs.append(dev)
+            except Exception:
+                pass
+        if not odd_devs:
+            # 沒有 ODD 裝置時，顯示所有可存取的裝置（含非 ODD）
+            messagebox.showinfo(
+                "掃描結果",
+                "未找到 USB ODD 裝置（peripheral type 0x05 CD/DVD）。\n\n"
+                "請確認：\n"
+                "1. USB ODD 已正確連接\n"
+                "2. 驅動程式已正確安裝\n"
+                "3. 以系統管理員權限執行（Windows）",
+                parent=self)
+            # 仍顯示所有找到的裝置供手動選擇
+            self.device_cb["values"] = devs
+            self.device_var.set(devs[0] if devs else "")
+            self.status_var.set(f"找到 {len(devs)} 個候選裝置（無 ODD 類型）")
+            self._on_device_selected()
+            return
+        self.device_cb["values"] = odd_devs
+        self.device_var.set(odd_devs[0])
+        self.status_var.set(f"找到 {len(odd_devs)} 個 ODD 裝置：{odd_devs[0]} ...")
         self._on_device_selected()
 
     def _on_device_selected(self):

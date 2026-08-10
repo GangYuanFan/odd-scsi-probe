@@ -470,6 +470,21 @@ if os.name == "nt":
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     _configure_windows_ctypes(kernel32)
 
+    def _windows_device_exists(path):
+        """Check if a Windows device path exists by trying to open it with
+        GENERIC_READ (no special privileges needed). Returns True only when
+        CreateFileW succeeds — the device is physically present."""
+        try:
+            handle = kernel32.CreateFileW(
+                path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                None, OPEN_EXISTING, 0, None)
+            if handle != INVALID_HANDLE_VALUE:
+                kernel32.CloseHandle(handle)
+                return True
+        except Exception:
+            pass
+        return False
+
     def scsi_execute(path, cdb, alloc, timeout_s, direction="in", out_data=b""):
         """Run one SCSI command via IOCTL_SCSI_PASS_THROUGH. Same return contract.
 
@@ -994,9 +1009,13 @@ def discover_devices():
     if os.name == "nt":
         paths = []
         for i in range(16):
-            paths.append(rf"\\.\CdRom{i}")
+            path = rf"\\.\CdRom{i}"
+            if _windows_device_exists(path):
+                paths.append(path)
         for i in range(16):
-            paths.append(rf"\\.\Scsi{i}")
+            path = rf"\\.\Scsi{i}"
+            if _windows_device_exists(path):
+                paths.append(path)
         return paths
     return []
 
